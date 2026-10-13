@@ -1,0 +1,11 @@
+{
+  "Source": "https://ftp.ripe.net/pub/stats/apnic/2026/delegated-apnic-20261002.gz",
+  "Upstream": "https://ftp.apnic.net/stats/apnic/",
+  "FetchedUtc": "2026-10-03T16:41:54.0519796Z",
+  "SnapshotHeader": "2|apnic|20261002|89376|19830613|20261001|+1000",
+  "SourceMd5": "9FBE1B53D87FE14B2E908F86260957A4",
+  "AllocationCount": 8793,
+  "PrefixCount": 5495,
+  "Sha256": "58790CCF97A41759D9CE05DCA1118B756079956808F4241A29F58358D129E39B",
+  "Note": "CN allocation country is approximate, not guaranteed current geolocation."
+}

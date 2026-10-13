@@ -1,0 +1,13 @@
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Reflection;
+using System.Threading;
+using FastOrangeCombined;
+class CooldownHarness {
+ static int checks;
+ static void Check(bool value,string name){if(!value)throw new Exception(name);checks++;Console.WriteLine("PASS "+name);}
+ static void Main(){Type t=typeof(BridgeServer).Assembly.GetType("FastOrangeCombined.BridgeServer+DirectDns");object dns=Activator.CreateInstance(t,true);BindingFlags flags=BindingFlags.Instance|BindingFlags.NonPublic;MethodInfo mark=t.GetMethod("MarkFailure",flags),cool=t.GetMethod("IsCoolingDown",flags),resolve=t.GetMethod("Resolve",flags),clear=t.GetMethod("Clear",flags),restart=t.GetMethod("Restart",flags);var failures=(Dictionary<int,DateTime>)t.GetField("failureCooldown",flags).GetValue(dns);Check((bool)mark.Invoke(dns,new object[]{42}),"failure can mark a live resolver");double seconds=(failures[42]-DateTime.UtcNow).TotalSeconds;Check(seconds>59&&seconds<=60,"failure cooldown is 60 seconds");Check((bool)cool.Invoke(dns,new object[]{42})&&!(bool)cool.Invoke(dns,new object[]{43}),"cooldown is scoped to physical interface");
+ int finished=0;string error=null;using(var completed=new ManualResetEvent(false)){for(int i=0;i<32;i++){Action<IPAddress[],string> done=delegate(IPAddress[] addresses,string source){if(addresses==null||addresses.Length==0||source!="systemDNS-fallback/degraded/cooldown")error="unexpected cooldown response";if(Interlocked.Increment(ref finished)==32)completed.Set();};resolve.Invoke(dns,new object[]{"localhost",42,done});}Check(completed.WaitOne(5000)&&error==null,"32 concurrent cooldown resolutions use system fallback immediately");}
+ object pending=t.GetField("pending",flags).GetValue(dns);int pendingCount=(int)pending.GetType().GetProperty("Count").GetValue(pending,null);Check(pendingCount==0,"cooldown resolutions create no physical DoH queries");object cache=t.GetField("cache",flags).GetValue(dns);Check((int)cache.GetType().GetProperty("Count").GetValue(cache,null)==0,"unknown-TTL system fallback results are not cached");failures[42]=DateTime.UtcNow.AddSeconds(-1);Check(!(bool)cool.Invoke(dns,new object[]{42})&&!failures.ContainsKey(42),"expired cooldown is removed so physical retry is enabled");mark.Invoke(dns,new object[]{42});clear.Invoke(dns,null);Check(failures.Count==0&&!(bool)mark.Invoke(dns,new object[]{42}),"Clear removes cooldown and rejects late failure updates");restart.Invoke(dns,null);Check(!(bool)cool.Invoke(dns,new object[]{42}),"Restart begins without old cooldown");Console.WriteLine("ALL "+checks+" COOLDOWN CHECKS PASSED");}
+}

@@ -1,0 +1,2 @@
+# Preserve signed vendor manifests and all release inputs byte-for-byte.
+* -text

@@ -1,0 +1,36 @@
+快橙伴航 1.0.0 — 第三方组件说明
+
+本目录按组件保留许可与来源，不将不同组件的许可混为一份。
+
+Qt / PySide6 / Shiboken6 6.12.0
+原生 Qt Core、Gui、Widgets，动态链接。DLL 在 _internal 中，可按兼容接口替换。
+许可、第三方归属及选项：https://doc.qt.io/qtforpython-6/licenses.html
+本包使用开源许可条款；随附 LGPL-3.0.txt 和 GPL 文本、官方归属说明。
+对应源码：https://code.qt.io/cgit/qt/qtbase.git/?h=v6.12.0
+对应绑定源码：https://code.qt.io/cgit/pyside/pyside-setup.git/?h=v6.12.0
+重建脚本和自编应用源码随本项目的源码包提供，不限制自行替换或调试库组件。
+
+Python 3.12.14 — Python Software Foundation License，见 Python-LICENSE.txt。
+源码：https://www.python.org/downloads/source/
+PyInstaller 6.22.3 — 其许可含打包应用分发例外，见相应 COPYING.txt。
+源码：https://github.com/pyinstaller/pyinstaller/tree/v6.22.3
+
+国内域名数据
+Loyalsoldier/v2ray-rules-dat 的 direct-list.txt，GPL-3.0；许可及快照来源另附。
+https://github.com/Loyalsoldier/v2ray-rules-dat
+域名数据文件和相应自编分流源码也包含在源码包中。
+国内 IPv4 分配数据来源 APNIC / RIPE，快照出处见 metadata 文件。
+国家分配记录用于近似分类，不能保证每个网站、CDN 地址的实际地理位置。
+
+快橙
+随附从官方公开部署地址下载的安装程序及 3.0.0.179 公共应用文件。
+https://inst.bozhongw.cn/instwind/FastOrange.application
+快橙程序保留原厂签名，权利与服务条款属于原厂。
+本工具不修改快橙程序、不附带使用者的账号、缓存、凭据或登录设置。
+在其他电脑上首次部署快橙、网络驱动、登录和使用服务，仍由原厂流程处理。
+
+视觉参考
+应使用者要求参考 Corona Studio LauncherX 的公开界面布局。
+https://corona.studio/lx
+风景、二次元、宇宙及抽象背景由 Codex 内置 imagegen 为本项目生成，提示词随源码 app/assets 附带。
+绘图和交互由本项目自行实现；未包含 LauncherX 截图、图标、源码或商标资源。

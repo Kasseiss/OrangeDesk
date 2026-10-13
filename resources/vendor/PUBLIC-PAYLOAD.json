@@ -1,0 +1,221 @@
+{
+  "source": "https://inst.bozhongw.cn/instwind/",
+  "version": "3.0.0.179",
+  "files": [
+    {
+      "name": "ControlzEx.dll",
+      "size": 250432,
+      "sha256": "f15d89d9720eedb94c09b1db32ca6a514e9eff2906da91396ffd7f877714911e"
+    },
+    {
+      "name": "Core.dll",
+      "size": 246768,
+      "sha256": "e3b0072c2894a0b62cc3672771f01210dd30f79049a332bf145b31b208da192a"
+    },
+    {
+      "name": "DevExpress.Mvvm.dll",
+      "size": 550896,
+      "sha256": "492c99dcb239a95f0ce2c3e9a523f77e9eeaee607bc13af8b448c67a8623a951"
+    },
+    {
+      "name": "DevExpress.Mvvm.UI.dll",
+      "size": 923632,
+      "sha256": "67146c0b387ee0e26ad0dda655d3941d5a5aa2933898a11b6f3fb8ff12546210"
+    },
+    {
+      "name": "DeviceId.dll",
+      "size": 35824,
+      "sha256": "9c33682492e129f8e3dd57b99fe2152d0821ad03e8562032bc6d034d6f1d8cd2"
+    },
+    {
+      "name": "DeviceId.Windows.dll",
+      "size": 20464,
+      "sha256": "e06a40d1858be4fb6943905d5be01d47c2862656a3f38ac77f62dc2b69780eda"
+    },
+    {
+      "name": "DeviceId.Windows.Wmi.dll",
+      "size": 22512,
+      "sha256": "b1be72926923f6a5ce00c9444de99acf3b0a4de11b9fd3a12d2d0dd0e99ed970"
+    },
+    {
+      "name": "DotRas.dll",
+      "size": 106992,
+      "sha256": "1997070f4babfcfa7d237f21941893d66a5eee488fc838624fb163af9f99c716"
+    },
+    {
+      "name": "FastOrange.exe",
+      "size": 4078064,
+      "sha256": "ad439474a6daa7c092e525102a5cab78b8a4c70137e923b6c698403a423858ca"
+    },
+    {
+      "name": "Hardcodet.NotifyIcon.Wpf.dll",
+      "size": 130032,
+      "sha256": "0e6cb241f0e40ba71eb286372b336ed0132829b3bfda12145a91fe25a4570504"
+    },
+    {
+      "name": "MahApps.Metro.dll",
+      "size": 3571048,
+      "sha256": "02006a3c2e834b33f7d60eb73713612095dfc0cef3a8e8eef748d2732567e14c"
+    },
+    {
+      "name": "MahApps.Metro.SimpleChildWindow.dll",
+      "size": 61808,
+      "sha256": "0ab73e9311780caab649ce42a4724ddaefad6c5372171235cf39cb6eebda0fcc"
+    },
+    {
+      "name": "de/MahApps.Metro.resources.dll",
+      "size": 23024,
+      "sha256": "51601b63c9104fae1bead9e04af11ba875a32a6ddf02167829f5d05415011f06"
+    },
+    {
+      "name": "MaterialDesignColors.dll",
+      "size": 314864,
+      "sha256": "e0e403cd664d1d85a2ea67730ac027f2e66f14c7c7c186f86bf097d7dc5a13c2"
+    },
+    {
+      "name": "MaterialDesignThemes.MahApps.dll",
+      "size": 125936,
+      "sha256": "b368e20382817b63a5d6f04a555b70c7134112823ec8e172f45371370a5709c6"
+    },
+    {
+      "name": "MaterialDesignThemes.Wpf.dll",
+      "size": 9602544,
+      "sha256": "0eb4e43ff35c1d604ad4edbc385bb3be63016af5324afdb4ebbd23e6c8930de1"
+    },
+    {
+      "name": "Microsoft.Bcl.AsyncInterfaces.dll",
+      "size": 26904,
+      "sha256": "80678203bd0203a6594f4e330b22543c0de5059382bb1c9334b7868b8f31b1bc"
+    },
+    {
+      "name": "Microsoft.Xaml.Behaviors.dll",
+      "size": 146472,
+      "sha256": "09b8759a4173eb4fe0cb9dd10548850ac514cc67f38c070861bad5b67f8c419b"
+    },
+    {
+      "name": "MtlsClientLib.dll",
+      "size": 30192,
+      "sha256": "1cb84edef9c7b96d1fb5f95619868c5833ef854f60e3812e9c4c5805304bd0d6"
+    },
+    {
+      "name": "Newtonsoft.Json.dll",
+      "size": 711952,
+      "sha256": "e1e27af7b07eeedf5ce71a9255f0422816a6fc5849a483c6714e1b472044fa9d"
+    },
+    {
+      "name": "Notification.Wpf.dll",
+      "size": 176624,
+      "sha256": "c80738acd03d94f4fa9e2d23e6bf11cb2a7cf473e21bcab5bc47142f36845f26"
+    },
+    {
+      "name": "QRCoder.dll",
+      "size": 166384,
+      "sha256": "c6f4cbf575eb4525a8d54f5701eeba0f3354d2ad85dd8f8c85a3777b6b22da7a"
+    },
+    {
+      "name": "RandomExtensions.WindowsDX.dll",
+      "size": 18928,
+      "sha256": "d2545fffa7302548caf350a29612ed5b7cd4f8c2ce54a7b474fbae96fd1167e9"
+    },
+    {
+      "name": "RestSharp.dll",
+      "size": 202736,
+      "sha256": "6d8943fcb1f4e130ffeb63b8cffbe3232490917eaa23ed2848bfcdaebe9a5dba"
+    },
+    {
+      "name": "System.Buffers.dll",
+      "size": 20856,
+      "sha256": "accccfbe45d9f08ffeed9916e37b33e98c65be012cfff6e7fa7b67210ce1fefb"
+    },
+    {
+      "name": "System.Collections.Immutable.dll",
+      "size": 252696,
+      "sha256": "d5ec0837bb176abf13dcd52c658c4e84c5264f67065b9c19679b6643f7d21564"
+    },
+    {
+      "name": "System.Memory.dll",
+      "size": 142240,
+      "sha256": "bf3fb84664f4097f1a8a9bc71a51dcf8cf1a905d4080a4d290da1730866e856f"
+    },
+    {
+      "name": "System.Numerics.Vectors.dll",
+      "size": 115856,
+      "sha256": "1d3ef8698281e7cf7371d1554afef5872b39f96c26da772210a33da041ba1183"
+    },
+    {
+      "name": "System.Reflection.Metadata.dll",
+      "size": 487600,
+      "sha256": "1c5350e03365afe48300f0234ab2647e96cf3c0f4e505bb38df62ac95f494a48"
+    },
+    {
+      "name": "System.Runtime.CompilerServices.Unsafe.dll",
+      "size": 18024,
+      "sha256": "37768488e8ef45729bc7d9a2677633c6450042975bb96516e186da6cb9cd0dcf"
+    },
+    {
+      "name": "System.Text.Encodings.Web.dll",
+      "size": 79024,
+      "sha256": "e9c4f5eed186cb129c527c4b8d67d163ea2f2396e9d8b96e30b5e7c12203ce84"
+    },
+    {
+      "name": "System.Text.Json.dll",
+      "size": 644888,
+      "sha256": "86c3f263ae9b4469ab1266c80471087082447eb4a38e6b97bf5e84de15c07a1d"
+    },
+    {
+      "name": "System.Threading.Tasks.Extensions.dll",
+      "size": 25984,
+      "sha256": "4f81ffd0dc7204db75afc35ea4291769b07c440592f28894260eea76626a23c6"
+    },
+    {
+      "name": "System.ValueTuple.dll",
+      "size": 25232,
+      "sha256": "e905d102585b22c6df04f219af5cbdbfa7bc165979e9788b62df6dcc165e10f4"
+    },
+    {
+      "name": "WeightedRandomizer.WindowsDX.dll",
+      "size": 18928,
+      "sha256": "8fcd03e1b7dab3f10e9b5bc90142a25d05261771e25cee7b8cf69517d7816fb7"
+    },
+    {
+      "name": "FastOrange.exe.config",
+      "size": 4202,
+      "sha256": "03123d991cdb4d8e42bfe49be3fe1e5af1b5a286fe24f2ed6b62a086b09c4af5"
+    },
+    {
+      "name": "cacheditem.silk",
+      "size": 475376,
+      "sha256": "121b0534fb4ccc9b21a22dc9293ed522766e4539ee703150a17b2068fcbe24cf"
+    },
+    {
+      "name": "icodark.ico",
+      "size": 22449,
+      "sha256": "bee9a28c6fe6f3bb4e6a16f0038875765adf8a17c5039a2d30499ac0a93efae3"
+    },
+    {
+      "name": "patch.zip",
+      "size": 2773892,
+      "sha256": "d21680bcbf7aa8934132f1fc7d71955b2e6de661979e43a266d6e0f31445a364"
+    },
+    {
+      "name": "patchx64.zip",
+      "size": 2386065,
+      "sha256": "2cb9186e0d64b466fa56a851ba113d1e46a70d2a49825d81cd8d24a4a834bd10"
+    },
+    {
+      "name": "ph.pbk",
+      "size": 5794,
+      "sha256": "a9b4d93ce041baca815f6b82231c7b7d33d44be47406da4c871d47cf472f5a3f"
+    },
+    {
+      "name": "tap-windows-9.21.0.exe",
+      "size": 225448,
+      "sha256": "325222566df55b85eeae5247ec08bbf555bf2bde00d14cb1a8cf323df4a97c03"
+    },
+    {
+      "name": "tap.zip",
+      "size": 292038,
+      "sha256": "c9222041ef1ae86de7864ac31092e6200c88fc56645d48bde29734205123ab96"
+    }
+  ]
+}
