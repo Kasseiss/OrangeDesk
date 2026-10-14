@@ -22,8 +22,9 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .whitelist import WhitelistStore, WhitelistError, normalize_target
+from .storage import state_root, migrate_preferences
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 FILETIME_TO_DOTNET = 504911232000000000
 IDLE_SECONDS = 120
 
@@ -39,7 +40,11 @@ def resource_root() -> Path:
 
 
 def service_root() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local"))) / "OrangeDesk"
+    return state_root()
+
+
+def initialize_storage() -> None:
+    migrate_preferences(service_root(), writer=atomic_json, secure=secure_directory)
 
 
 def gui_command(*args: str) -> list[str]:
@@ -559,7 +564,7 @@ class Coordinator:
                 if self._stop_requested.is_set():
                     self._set("stopped", "启动已取消，未修改代理设置。")
                     return
-                sessions = Path(os.environ["LOCALAPPDATA"]) / "FastOrangeCombined/sessions"
+                sessions = self.root / "network/sessions"
                 session = sessions / uuid.uuid4().hex
                 session.mkdir(parents=True)
                 atomic_json(session / "bundle.json", {"Path": str(bundle)})
@@ -568,7 +573,7 @@ class Coordinator:
                 output = (session / "desktop-worker.log").open("ab", buffering=0)
                 args = [powershell_path(), "-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", str(runtime),
                         "-Role", "Worker", "-SessionPath", str(session), "-ControllerId", str(os.getpid()), "-ControllerTicks", str(identity[0]),
-                        "-WhitelistPath", str(self.root / "whitelist.json")]
+                        "-WhitelistPath", str(self.root / "whitelist.json"), "-StateRoot", str(self.root)]
                 try:
                     worker = hidden_spawn(args, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
                 except Exception:
@@ -655,7 +660,7 @@ class Coordinator:
                 raise ServiceError("恢复文件缺失，请修复 OrangeDesk 安装。")
             # This is the same packaged recovery routine as CMD --restore. It refuses
             # another live owner, and restores only the PAC profile owned by this tool.
-            process = hidden_spawn([powershell_path(), "-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", str(runtime), "-Role", "Restore"],
+            process = hidden_spawn([powershell_path(), "-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", str(runtime), "-Role", "Restore", "-StateRoot", str(self.root)],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             try:
                 output, _ = process.communicate(timeout=40)
@@ -690,7 +695,7 @@ class Coordinator:
             match = re.fullmatch(r"http://127\.0\.0\.1:[0-9]+/fastorange/([a-f0-9]{32})/proxy\.pac", url)
             if not match:
                 return None
-            session = Path(os.environ["LOCALAPPDATA"]) / "FastOrangeCombined/sessions" / match.group(1)
+            session = self.root / "network/sessions" / match.group(1)
             status = read_json(session / "worker-status.json")
             identity = process_identity(int(status.get("ProcessId", 0)))
             if status.get("State") == "Running" and identity and os.path.normcase(identity[1]) == os.path.normcase(powershell_path()):
@@ -832,6 +837,7 @@ def serve() -> int:
     done = threading.Event()
     try:
         secure_directory(root)
+        initialize_storage()
         identity = process_identity(os.getpid())
         if not identity:
             raise ServiceError("无法确认后台进程身份。")

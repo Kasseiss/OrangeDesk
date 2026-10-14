@@ -196,6 +196,8 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(args[args.index("-Role") + 1], "Worker")
         self.assertEqual(args[args.index("-ControllerId") + 1], str(os.getpid()))
         self.assertEqual(args[args.index("-ControllerTicks") + 1], "639000000000000000")
+        self.assertEqual(args[args.index("-StateRoot") + 1], str(self.coordinator.root))
+        self.assertEqual(self.coordinator._session.parent, self.coordinator.root / 'network/sessions')
         session = self.coordinator._session
         self.assertTrue((session / "pause").is_file())
         self.assertEqual(engine.read_json(session / "bundle.json")["Path"], str(self.resources / "快橙一键启动.cmd"))

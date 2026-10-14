@@ -1,6 +1,6 @@
 """Independent, Qt-free recovery for one reversible foreign-window lease.
 
-Protocol: ``--vendor-guard <LocalAppData/OrangeDesk/vendor-host/lease-UUID.json>``.
+Protocol: ``--vendor-guard <state-root/vendor-host/lease-UUID.json>``.
 The GUI publishes a recovery record before touching the vendor HWND. This
 process holds the per-user/per-process occupancy mutex until release/recovery.
 """

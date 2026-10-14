@@ -29,7 +29,7 @@ from .theme import APP_NAME, COLORS, STYLESHEET, stylesheet_for, is_dark_theme
 from .vendor_host import VendorHost, finish_pending_discovery
 from .whitelist import normalize_target, WhitelistError
 from .whitelist_ui import WhitelistDialog
-from .engine import recent_destinations
+from .engine import recent_destinations, service_root, initialize_storage
 
 
 BACKGROUND_PRESETS = (
@@ -45,7 +45,7 @@ DEFAULT_BACKGROUND = "night-lake"
 
 
 def _appearance_file():
-    return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local"))) / "OrangeDesk" / "appearance.json"
+    return service_root() / "appearance.json"
 
 
 def _read_appearance(path):
@@ -2014,6 +2014,8 @@ class CompanionWindow(QMainWindow):
 
 
 def run_gui(argv=None, screenshot_path: str | None = None, preview: bool = False) -> int:
+    if not preview:
+        initialize_storage()
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv[:1])
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("FastOrangeCompanion")

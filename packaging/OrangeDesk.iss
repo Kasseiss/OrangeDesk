@@ -1,4 +1,4 @@
-#define AppVersion "1.2.0"
+#define AppVersion "1.2.1"
 [Setup]
 AppId={{D6C0C715-6EB7-4D5B-B481-B4C7CCDD50B2}
 AppName=快橙伴航

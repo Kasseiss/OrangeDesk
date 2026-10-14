@@ -10,14 +10,15 @@ param(
     [switch]$Simulation,
     [int]$SimulationAppId = 0,
     [int]$RunSeconds = 0,
-    [string]$WhitelistPath = (Join-Path $env:LOCALAPPDATA 'OrangeDesk\whitelist.json')
+    [string]$StateRoot = $(if ($env:ORANGEDESK_DATA_HOME) { $env:ORANGEDESK_DATA_HOME } else { Join-Path $env:USERPROFILE '.OrangeDesk' }),
+    [string]$WhitelistPath = (Join-Path $StateRoot 'whitelist.json')
 )
 $ErrorActionPreference = 'Stop'
 $script:LeaseSeconds = 90
 $script:RenewSeconds = 20
 $script:PowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $script:Utf8 = [Text.UTF8Encoding]::new($false)
-$script:Root = Join-Path $env:LOCALAPPDATA 'FastOrangeCombined'
+$script:Root = Join-Path $StateRoot 'network'
 $script:UiProcess = $null
 $script:UiSequence = 0
 $script:Owned = @{}
@@ -27,7 +28,7 @@ $script:StopReason = ''
 $script:FatalRouteError = $false
 $script:Bridge = $null
 $script:ProxyLease = $null
-$script:Version = '2026.10.11.doh'
+$script:Version = '2026.10.14.recovery'
 $script:LastDnsWarning = -999.0
 $script:BridgePolicy = $null
 $script:WhitelistRevision = 0
@@ -229,13 +230,41 @@ function Recover-TemporaryProxy {
     $current=[FastOrangeCombined.ProxySettings]::Read()
     if ($current.AutoUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/fastorange/([a-f0-9]{32})/proxy\.pac$') { return $false }
     $sessionId=$Matches[1]
-    $backupPath=Join-Path (Join-Path (Join-Path $script:Root 'sessions') $sessionId) 'proxy-before.json'
-    $saved=Read-Json $backupPath
+    $saved=Find-RecoveryRecord $sessionId $current.AutoUrl
     if (-not $saved -or $saved.PacUrl -cne $current.AutoUrl) { throw '未找到临时代理的恢复记录，停止自动修改。' }
     $before=Convert-ProxyProfile $saved.Before
     if ($saved.Applied) { $applied=Convert-ProxyProfile $saved.Applied }
     else { $applied=Convert-ProxyProfile $saved.Before; $applied.Flags=5; $applied.AutoUrl=$saved.PacUrl }
     return [FastOrangeCombined.ProxySettings]::RestoreOwned($before,$applied,$saved.PacUrl)
+}
+function Find-RecoveryRecord([string]$SessionId,[string]$PacUrl) {
+    if ($SessionId -notmatch '^[a-f0-9]{32}$') { throw '代理恢复会话标识无效。' }
+    $relative='sessions\'+$SessionId+'\proxy-before.json'
+    $candidates=[Collections.Generic.List[string]]::new()
+    $candidates.Add((Join-Path $script:Root $relative))
+    $legacy=Join-Path $env:LOCALAPPDATA 'FastOrangeCombined'
+    $candidates.Add((Join-Path $legacy $relative))
+    $packages=Join-Path $env:LOCALAPPDATA 'Packages'
+    if ([IO.Directory]::Exists($packages)) {
+        foreach ($package in @([IO.Directory]::EnumerateDirectories($packages) | Sort-Object | Select-Object -First 512)) {
+            $legacy=Join-Path $package 'LocalCache\Local\FastOrangeCombined'
+            $candidates.Add((Join-Path $legacy $relative))
+        }
+    }
+    foreach ($path in $candidates) {
+        if (-not [IO.File]::Exists($path)) { continue }
+        if ([IO.FileInfo]::new($path).Length -gt 262144) { throw '代理恢复记录过大，停止自动修改。' }
+        $record=Read-Json $path
+        if (-not $record -or $record.PacUrl -cne $PacUrl) { continue }
+        if ($record.Version -ne 2 -or -not $record.Before) { throw '代理恢复记录版本或结构错误，停止自动修改。' }
+        # Validate all registry paths/types before passing any record to native
+        # restoration. A similar file for a different PAC is never accepted.
+        [void](Convert-ProxyProfile $record.Before)
+        if ($record.Applied) { [void](Convert-ProxyProfile $record.Applied) }
+        if ($path -cne $candidates[0]) { Write-Status '已从旧启动环境找回本次临时代理的恢复记录。' }
+        return $record
+    }
+    return $null
 }
 function Get-BrowserTarget {
     $routes=@(Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore)
@@ -333,8 +362,8 @@ function Assert-Continue {
     Sync-WhitelistOverrides
 }
 function Start-HiddenRole([string]$ChildRole,[string[]]$Extra,[switch]$Elevate) {
-    $arguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "{0}" -Role {1} -SessionPath "{2}" -WhitelistPath "{3}" {4}' -f
-        $PSCommandPath,$ChildRole,$SessionPath,$WhitelistPath,($Extra -join ' ')
+    $arguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "{0}" -Role {1} -SessionPath "{2}" -WhitelistPath "{3}" -StateRoot "{4}" {5}' -f
+        $PSCommandPath,$ChildRole,$SessionPath,$WhitelistPath,$StateRoot,($Extra -join ' ')
     if ($Elevate) { return Start-Process -FilePath $script:PowerShell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru }
     return Start-Process -FilePath $script:PowerShell -ArgumentList $arguments -WindowStyle Hidden -PassThru
 }
