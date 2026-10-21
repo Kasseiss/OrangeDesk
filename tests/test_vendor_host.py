@@ -111,7 +111,7 @@ def qa_crash_host(stub_path: str, output: str) -> int:
     from PySide6.QtWidgets import QApplication
     from app.vendor_host import VendorHost
     app = QApplication([])
-    data = json.loads(Path(stub_path).read_text())
+    data = json.loads(Path(stub_path).read_text(encoding="utf-8"))
     target = WindowTarget(**data["target"])
     host = VendorHost(_qa_target=target)
     host.resize(300, 500)
@@ -144,7 +144,7 @@ class VendorLifecycleTests(unittest.TestCase):
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self._close_stub)
         self.assertTrue(wait_for(self.stub_path.exists))
-        self.data = json.loads(self.stub_path.read_text())
+        self.data = json.loads(self.stub_path.read_text(encoding="utf-8"))
         self.target = WindowTarget(**self.data["target"])
         self.original = snapshot(self.target)
         from app.vendor_windows import window_pid as real_window_pid
@@ -161,7 +161,7 @@ class VendorLifecycleTests(unittest.TestCase):
     def _close_stub(self):
         from app.vendor_windows import matches_target
         if self.stub.poll() is None and self.stub_path.exists():
-            target = WindowTarget(**json.loads(self.stub_path.read_text())["target"])
+            target = WindowTarget(**json.loads(self.stub_path.read_text(encoding="utf-8"))["target"])
             if matches_target(target):
                 user = _api()
                 user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -220,7 +220,7 @@ class VendorLifecycleTests(unittest.TestCase):
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: host.kill() if host.poll() is None else None)
         self.assertTrue(wait_for(ready.exists))
-        detail = json.loads(ready.read_text())
+        detail = json.loads(ready.read_text(encoding="utf-8"))
         self.assertNotIn("error", detail)
         record_path = Path(detail["record"])
         host.kill()  # Explicit QA host crash; never the vendor process.

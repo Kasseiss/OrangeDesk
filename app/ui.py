@@ -20,12 +20,13 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
+    QMainWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QFileDialog, QMessageBox, QCheckBox,
     QSizePolicy, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget, QGridLayout,
 )
 
 from .client import APP_VERSION, ensure_service, request
-from .theme import APP_NAME, COLORS, STYLESHEET, stylesheet_for, is_dark_theme
+from .theme import APP_NAME, COLORS, STYLESHEET, stylesheet_for, is_dark_theme, tokens
+from .ui_kit import ElidedLabel, StatusDot, StatusPill, ToggleSwitch, apply_application_palette, color, mix, ui_font
 from .vendor_host import VendorHost, finish_pending_discovery
 from .whitelist import normalize_target, WhitelistError
 from .whitelist_ui import WhitelistDialog
@@ -42,6 +43,15 @@ BACKGROUND_PRESETS = (
 )
 BACKGROUND_FILES = {item[0]: item[3] for item in BACKGROUND_PRESETS}
 DEFAULT_BACKGROUND = "night-lake"
+RAIL_WIDTH = 212
+# First matching phrase wins; "未生效/未确认" must never read as green.
+STATUS_RULES = (
+    ("等待启动", "neutral"), ("未生效", "warn"), ("未确认", "warn"), ("待确认", "warn"), ("待启用", "warn"),
+    ("需要", "warn"), ("异常", "danger"), ("暂未响应", "danger"),
+    ("等待", "pending"), ("正在", "pending"), ("处理中", "pending"),
+    ("已生效", "success"), ("已开启", "success"), ("已连接", "success"), ("运行中", "success"),
+    ("", "neutral"),
+)
 
 
 def _appearance_file():
@@ -80,6 +90,13 @@ def _card(name: str = "Card") -> QFrame:
     value = QFrame()
     value.setObjectName(name)
     return value
+
+
+def _set_compact_label_text(label: QLabel, text: str, limit: int = 120):
+    full = str(text)
+    compact = " ".join(full.split())
+    label.setText(compact if len(compact) <= limit else compact[:limit - 1] + "…")
+    label.setToolTip(full)
 
 
 def _button(text: str, name: str = "", tip: str = "") -> QPushButton:
@@ -234,83 +251,90 @@ class MotionButton(QPushButton):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bounds = QRectF(2, 2, self.width() - 4, self.height() - 4)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        bounds = QRectF(1, 1, self.width() - 2, self.height() - 2)
         name = self.objectName()
-        scale = 1.0 - (.023 if name == "Nav" else .035) * self._compression
-        p.translate(bounds.center() + QPointF(0, 1.5 * self._compression))
+        primary, nav = name == "Primary", name == "Nav"
+        borderless = name in ("TextButton", "WindowControl")
+        scale = 1.0 - (.015 if nav or borderless else .03) * self._compression
+        p.translate(bounds.center() + QPointF(0, 1.0 * self._compression))
         p.scale(scale, scale)
         p.translate(-bounds.center())
         disabled = not self.isEnabled()
         dark = is_dark_theme()
+        hover = self._hover
         path = QPainterPath()
-        radius = 9 if name == "Nav" else 11
+        radius = 9 if nav or name == "WindowControl" else 10 if primary else 8
         path.addRoundedRect(bounds, radius, radius)
-        primary = name == "Primary"
-        nav = name == "Nav"
-        ghost = name in ("Ghost", "TextButton")
+        accented = self.isCheckable() and self.isChecked() and not nav
+        border = None
         if primary:
-            gradient = QLinearGradient(bounds.topLeft(), bounds.bottomRight())
-            gradient.setColorAt(0, self._mix("#4ba7ff", "#6bcdff", self._hover))
-            gradient.setColorAt(1, self._mix("#256ae5", "#347dec", self._hover))
-            p.fillPath(path, QColor("#3b5879") if disabled else gradient)
-            border, ink = "#8bcfff", "#ffffff"
-        elif nav:
-            if dark:
-                p.fillPath(path, self._mix("#273d59", "#344e6c", self._hover) if self.isChecked() else QColor(122,180,233,int(36*self._hover)))
-                border, ink = ("#58789c", "#eef7ff") if self.isChecked() else ("#476480", "#b3c6da")
+            gradient = QLinearGradient(bounds.topLeft(), bounds.bottomLeft())
+            if disabled:
+                gradient.setColorAt(0, color("raised"))
+                gradient.setColorAt(1, color("raised"))
+                border = color("border")
             else:
-                p.fillPath(path, self._mix("#f4faff", "#ffffff", self._hover) if self.isChecked() else QColor(255,255,255,int(125*self._hover)))
-                border, ink = ("#bad0e5", "#234469") if self.isChecked() else ("#c3d6e8", "#37516b")
+                gradient.setColorAt(0, mix(color("accent"), color("accent_hi"), hover))
+                gradient.setColorAt(1, mix(color("accent_lo"), color("accent"), hover))
+            p.fillPath(path, gradient)
+            ink = color("faint") if disabled else color("accent_ink")
+        elif nav:
+            if self.isChecked():
+                p.fillPath(path, color("accent", 34 if dark else 40))
+                ink = color("ink")
+            else:
+                p.fillPath(path, color("ink", int((12 if dark else 10) * hover)))
+                ink = mix(color("muted"), color("ink"), hover)
         elif name == "WindowControl":
-            p.fillPath(path, QColor(224,241,255,int(35*self._hover)))
-            border, ink = "#00000000", "#e7f3ff"
-        elif ghost:
-            p.fillPath(path, self._mix("#172332", "#2a3c50", self._hover) if dark else self._mix("#eaf3fb", "#ffffff", self._hover))
-            border, ink = ("#41586e", "#d4e5f6") if dark else ("#abc3da", "#284a6b")
+            p.fillPath(path, color("ink", int(18 * hover)))
+            ink = mix(color("muted"), color("ink"), hover)
+        elif name == "TextButton":
+            ink = mix(color("accent_text"), color("accent_hi"), hover)
         else:
-            p.fillPath(path, self._mix("#233346", "#354e68", self._hover) if dark else self._mix("#dfedf9", "#f8fcff", self._hover))
-            border, ink = ("#4a647e", "#e4effb") if dark else ("#a9c2dc", "#274d72")
-        if name not in ("TextButton", "WindowControl") and (not nav or self.isChecked()):
-            p.setPen(QPen(QColor(border), 1))
+            fill = mix(color("raised"), color("accent"), .10 * hover + (.16 if accented else 0.0))
+            p.fillPath(path, fill)
+            border = mix(color("border_strong"), color("accent"), max(hover * .6, 1.0 if accented else 0.0))
+            ink = color("danger") if name == "Danger" else color("ink")
+            if name == "Danger":
+                border = mix(color("border_strong"), color("danger"), .5 + .5 * hover)
+        if disabled and not primary:
+            ink = color("faint")
+            if border is not None:
+                border = color("border")
+        if border is not None:
+            p.setPen(QPen(border, 1))
             p.drawPath(path)
         if nav and self.isChecked():
-            p.setPen(QPen(QColor("#87c7ff" if dark else "#548ee0"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            p.drawLine(QPointF(bounds.width()*.3, bounds.bottom()-2), QPointF(bounds.width()*.7, bounds.bottom()-2))
-        if self._hover > 0 and not disabled:
-            p.setClipPath(path)
-            shine = QLinearGradient(bounds.left(), 0, bounds.right(), 0)
-            shine.setColorAt(0, QColor(140, 221, 255, 0))
-            shine.setColorAt(.35 + .4 * self._hover, QColor(180, 235, 255, int(38 * self._hover)))
-            shine.setColorAt(1, QColor(140, 221, 255, 0))
-            p.fillRect(bounds, shine)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color("accent"))
+            p.drawRoundedRect(QRectF(bounds.left(), bounds.center().y() - 9, 3, 18), 1.5, 1.5)
         if self._pulse < 1 and not disabled:
             p.setClipPath(path)
-            bloom = QRadialGradient(self._press_at, max(10, bounds.width() * (.12 + 1.1 * self._pulse)))
-            bloom.setColorAt(0, QColor(220, 247, 255, int(115 * (1-self._pulse))))
-            bloom.setColorAt(.6, QColor(111, 203, 255, int(72 * (1-self._pulse))))
-            bloom.setColorAt(1, QColor(84, 164, 255, 0))
+            bloom = QRadialGradient(self._press_at, max(10, bounds.width() * (.12 + .9 * self._pulse)))
+            glow = QColor(255, 255, 255) if primary else color("accent")
+            bloom.setColorAt(0, QColor(glow.red(), glow.green(), glow.blue(), int(70 * (1 - self._pulse))))
+            bloom.setColorAt(1, QColor(glow.red(), glow.green(), glow.blue(), 0))
             p.fillRect(bounds, bloom)
-        p.setClipping(False)
-        if (self._hover > 0 or self._compression > 0) and not disabled:
-            halo = QColor("#93d7ff" if dark or primary else "#5698d1")
-            halo.setAlpha(round(110 * self._hover + 90 * max(0.0, self._compression)))
-            p.setPen(QPen(halo, 1.3))
-            p.drawPath(path)
-        p.setPen(QColor("#9cabb9" if disabled and dark else "#778b9d" if disabled else ink))
-        font = QFont("Microsoft YaHei UI", 11 if primary else 10)
-        font.setWeight(QFont.Weight.DemiBold if primary or self.isChecked() else QFont.Weight.Medium)
-        p.setFont(font)
-        pad = 4 if name == "WindowControl" else 10 if name == "Ghost" else 14
+            p.setClipping(False)
+        p.setPen(ink)
+        p.setFont(ui_font(13 if primary or name == "WindowControl" else 12,
+                          QFont.Weight.DemiBold if primary or (nav and self.isChecked()) else QFont.Weight.Medium))
+        pad = 3 if name == "WindowControl" else 14 if nav else 0 if name == "TextButton" else 12
         text_rect = bounds.adjusted(pad, 0, -pad, 0)
         align = Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignLeft if nav or name == "TextButton" else Qt.AlignmentFlag.AlignHCenter)
         if not self.icon().isNull():
             size = self.iconSize()
-            self.icon().paint(p, int(text_rect.left()), int((self.height()-size.height())/2), size.width(), size.height())
-            text_rect.adjust(size.width()+10, 0, 0, 0)
+            state = QIcon.State.On if self.isChecked() else QIcon.State.Off
+            mode = QIcon.Mode.Disabled if disabled else QIcon.Mode.Normal
+            self.icon().paint(p, int(text_rect.left()), int((self.height() - size.height()) / 2),
+                              size.width(), size.height(), Qt.AlignmentFlag.AlignCenter, mode, state)
+            text_rect.adjust(size.width() + 10, 0, 0, 0)
         p.drawText(text_rect, align, self.text())
         if self.hasFocus() and self._keyboard_focus:
-            p.setPen(QPen(QColor("#f2b073"), 1, Qt.PenStyle.DotLine))
-            p.drawRoundedRect(bounds.adjusted(4, 4, -4, -4), 7, 7)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(color("accent", 200), 1.5))
+            p.drawRoundedRect(bounds.adjusted(-0.5, -0.5, 0.5, 0.5), radius + 1, radius + 1)
 
 
 class EnergyHero(QFrame):
@@ -528,8 +552,8 @@ class BackgroundTile(MotionButton):
         self.available = available
         self.setCheckable(True)
         self.setEnabled(available)
-        self.setFixedHeight(112)
-        self.setMinimumWidth(160)
+        self.setFixedHeight(96)
+        self.setMinimumWidth(130)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAccessibleName(f"{title}，{category}" + ("" if available else "，待准备"))
         self.setToolTip(f"{category} · {title}" if available else "背景尚未准备好")
@@ -547,7 +571,7 @@ class BackgroundTile(MotionButton):
         p.translate(-bounds.center())
         path = QPainterPath(); path.addRoundedRect(bounds, 11, 11)
         p.setClipPath(path)
-        p.fillPath(path, QColor("#1b2e43" if is_dark_theme() else "#a8bdd0"))
+        p.fillPath(path, color("raised"))
         if not self.thumbnail.isNull():
             # A small thumbnail is the only per-tile retained bitmap.
             source = QRectF(self.thumbnail.rect())
@@ -563,11 +587,11 @@ class BackgroundTile(MotionButton):
         hover = float(getattr(self, "_hover", 0.0))
         pulse = float(getattr(self, "_pulse", 1.0))
         if hover > 0:
-            p.fillRect(bounds, QColor(120, 214, 255, int(28*hover)))
+            p.fillRect(bounds, color("accent", int(26*hover)))
         if pulse < 1:
             bloom = QRadialGradient(getattr(self, "_press_at", bounds.center()), max(15, bounds.width()*1.4*pulse))
-            bloom.setColorAt(0, QColor(219, 248, 255, int(155*(1-pulse))))
-            bloom.setColorAt(1, QColor(121, 218, 255, 0))
+            bloom.setColorAt(0, color("accent", int(120*(1-pulse))))
+            bloom.setColorAt(1, color("accent", 0))
             p.fillRect(bounds, bloom)
         p.setPen(QColor("#f0f7ff")); p.setFont(QFont("Microsoft YaHei UI", 9, QFont.Weight.DemiBold))
         p.drawText(bounds.adjusted(11, 0, -11, -9), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, self.title)
@@ -579,12 +603,12 @@ class BackgroundTile(MotionButton):
             p.drawText(bounds, Qt.AlignmentFlag.AlignCenter, "待准备")
         if self.isChecked():
             circle = QPointF(bounds.right()-17, bounds.top()+17)
-            p.setBrush(QColor("#4ba2f8")); p.setPen(Qt.PenStyle.NoPen); p.drawEllipse(circle, 10, 10)
-            p.setPen(QPen(QColor("#ffffff"), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.setBrush(color("accent")); p.setPen(Qt.PenStyle.NoPen); p.drawEllipse(circle, 10, 10)
+            p.setPen(QPen(color("accent_ink"), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             p.drawLine(circle+QPointF(-4,0),circle+QPointF(-1,3)); p.drawLine(circle+QPointF(-1,3),circle+QPointF(5,-4))
         p.setClipping(False)
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor("#80caff" if self.isChecked() else "#7896b0"), 2.3 if self.isChecked() else 1))
+        p.setPen(QPen(color("accent") if self.isChecked() else color("border_strong"), 2 if self.isChecked() else 1))
         p.drawPath(path)
 
 
@@ -659,6 +683,7 @@ class LandscapeCanvas(QWidget):
         self._background_source.setDevicePixelRatio(1.0)
         self._background_cache = QPixmap()
         self._background_key = None
+        self._background_mode = None
         self._background_builds = 0
         self.motion = QVariantAnimation(self)
         self.motion.setDuration(850)
@@ -719,7 +744,8 @@ class LandscapeCanvas(QWidget):
 
     def _background_for_size(self, width, height, dpr):
         key = (max(1, int(width)), max(1, int(height)), round(float(dpr), 4))
-        if key == self._background_key and not self._background_cache.isNull():
+        mode = "dark" if is_dark_theme() else "light"
+        if key == self._background_key and mode == self._background_mode and not self._background_cache.isNull():
             return self._background_cache
         pixel_width = max(1, int(math.ceil(key[0] * key[2])))
         pixel_height = max(1, int(math.ceil(key[1] * key[2])))
@@ -738,45 +764,46 @@ class LandscapeCanvas(QWidget):
             # A missing resource leaves a quiet gradient, never the old polygon
             # mountains or synthetic circular star trails.
             backdrop = QPixmap(pixel_width, pixel_height)
-            backdrop.fill(QColor("#112c47"))
+            backdrop.fill(color("panel_high"))
         painter = QPainter(backdrop)
-        if self._background_source.isNull():
-            fallback = QLinearGradient(0, 0, pixel_width*.25, pixel_height)
-            fallback.setColorAt(0, QColor("#08182c"))
-            fallback.setColorAt(.55, QColor("#1d4260"))
-            fallback.setColorAt(1, QColor("#183045"))
-            painter.fillRect(backdrop.rect(), fallback)
-        # Shade only the text edge and the bottom bar; the snow peaks and lake
-        # through the center/right retain the original photograph's detail.
-        left = QLinearGradient(0, 0, pixel_width*.7, 0)
-        left.setColorAt(0, QColor(3, 12, 27, 62))
-        left.setColorAt(.48, QColor(3, 12, 27, 23))
-        left.setColorAt(1, QColor(3, 12, 27, 0))
-        painter.fillRect(backdrop.rect(), left)
-        bottom = QLinearGradient(0, pixel_height*.55, 0, pixel_height)
-        bottom.setColorAt(0, QColor(3, 12, 27, 0))
-        bottom.setColorAt(.55, QColor(3, 12, 27, 19))
-        bottom.setColorAt(1, QColor(3, 12, 27, 92))
-        painter.fillRect(backdrop.rect(), bottom)
+        # Quiet the photograph with the theme's own base colour so it reads as
+        # tinted atmosphere behind the headline, never as a competing image.
+        base = color("base")
+        dark = mode == "dark"
+        veil = QLinearGradient(0, 0, 0, pixel_height)
+        veil.setColorAt(0, QColor(base.red(), base.green(), base.blue(), 150 if dark else 170))
+        veil.setColorAt(.55, QColor(base.red(), base.green(), base.blue(), 205 if dark else 214))
+        veil.setColorAt(1, QColor(base.red(), base.green(), base.blue(), 255))
+        painter.fillRect(backdrop.rect(), veil)
+        side = QLinearGradient(0, 0, pixel_width*.75, 0)
+        side.setColorAt(0, QColor(base.red(), base.green(), base.blue(), 90))
+        side.setColorAt(1, QColor(base.red(), base.green(), base.blue(), 0))
+        painter.fillRect(backdrop.rect(), side)
         painter.end()
         backdrop.setDevicePixelRatio(key[2])
         self._background_cache, self._background_key = backdrop, key
+        self._background_mode = mode
         self._background_builds += 1
         return backdrop
 
     def paintEvent(self, event):
         p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        p.fillRect(self.rect(), QColor("#08182c"))
-        p.drawPixmap(QPointF(0, 0), self._background_for_size(w, h, self.devicePixelRatioF()))
-        if self.phase < .995:
-            # One luminous sweep per action; no permanently animated wallpaper.
-            x = w*(.28+.58*self.phase); y = h*(.14+.2*self.phase)
-            trail = QLinearGradient(x-w*.2,y-h*.05,x,y)
-            trail.setColorAt(0,QColor(139,224,255,0)); trail.setColorAt(1,QColor(206,245,255,int(210*(1-self.phase))))
-            p.setPen(QPen(trail,2.5,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap)); p.drawLine(QPointF(x-w*.2,y-h*.05),QPointF(x,y))
+        p.fillRect(self.rect(), color("base"))
+        # The wallpaper is a header band beside the navigation rail that fades
+        # into the flat graphite workspace; the rest of the window stays calm.
+        band_w, band_h = max(1, w - RAIL_WIDTH), min(h, 300)
+        p.drawPixmap(QPointF(RAIL_WIDTH, 0), self._background_for_size(band_w, band_h, self.devicePixelRatioF()))
+        # A warm glow whose strength follows the honest connection state; one
+        # soft pulse per action, never a permanently animated surface.
+        glow_alpha = (46 if self.energy > .7 else 22) + int(40 * (1 - self.phase))
+        glow = QRadialGradient(QPointF(w * .86, 0), max(240.0, w * .45))
+        glow.setColorAt(0, color("accent", glow_alpha))
+        glow.setColorAt(1, color("accent", 0))
+        p.fillRect(QRectF(RAIL_WIDTH, 0, band_w, min(h, 340)), glow)
         radius = 0 if self.window().isMaximized() or self.window().isFullScreen() else 18
-        p.setPen(QPen(QColor(173,214,255,70),1)); p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(color("border_strong"), 1))
         p.drawRoundedRect(QRectF(.5, .5, w-1, h-1), radius, radius)
 
 
@@ -859,6 +886,20 @@ def _icon(kind: str, color: str = "#8d9cb3") -> QIcon:
     return QIcon(pixmap)
 
 
+def _nav_icon(kind: str) -> QIcon:
+    """Muted symbol at rest, warm accent while its page is selected."""
+    palette = tokens()
+    icon = QIcon()
+    for key, state in (("muted", QIcon.State.Off), ("accent", QIcon.State.On)):
+        pixmap = QPixmap(48, 48)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        _paint_symbol(painter, QRectF(5, 5, 38, 38), kind, palette[key])
+        painter.end()
+        icon.addPixmap(pixmap, QIcon.Mode.Normal, state)
+    return icon
+
+
 class Logo(QWidget):
     def __init__(self, size: int = 46, hero: bool = False):
         super().__init__()
@@ -901,8 +942,8 @@ class Metric(QFrame):
         super().__init__()
         self.setObjectName("Metric")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(17, 14, 17, 13)
-        layout.setSpacing(3)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(2)
         row = QHBoxLayout()
         row.addWidget(_label(title, "MetricName"))
         icon = QLabel()
@@ -914,7 +955,7 @@ class Metric(QFrame):
         self.value = _label("—", "MetricValue")
         layout.addWidget(self.value)
         layout.addWidget(_label(hint, "MetricHint"))
-        self.setMinimumHeight(105)
+        self.setMinimumHeight(79)
         self._displayed = None
         self.count_motion = QVariantAnimation(self)
         self.count_motion.setDuration(550)
@@ -938,8 +979,7 @@ class Metric(QFrame):
         self._displayed = target
 
     def update_theme(self):
-        color = "#9fc9f4" if is_dark_theme() else "#48779f"
-        self._metric_icon.setPixmap(_icon(self._metric_kind, color).pixmap(19, 19))
+        self._metric_icon.setPixmap(_icon(self._metric_kind, tokens()["muted"]).pixmap(19, 19))
 
 
 class WorkerSignals(QObject):
@@ -961,7 +1001,10 @@ class ServiceTask(QRunnable):
                 ensure_service()
                 result = request("status", timeout=5)
             else:
-                timeout = 20 if self.action in ("start", "stop", "restore", "install_vpn") else 5
+                if self.action.startswith(("diagnostics-", "claude-protection-", "wechat-direct-")):
+                    timeout = 120
+                else:
+                    timeout = 20 if self.action in ("start", "stop", "restore", "install_vpn") else 5
                 result = request(self.action, self.payload, timeout=timeout)
             self.signals.succeeded.emit(self.action, result)
         except Exception as exc:
@@ -999,6 +1042,8 @@ class CompanionWindow(QMainWindow):
         self._whitelist_vendor_hidden = False
         self._whitelist_mutation_epoch = 0
         self._whitelist_list_epoch = 0
+        self._wechat_direct_feedback = ""
+        self._wechat_install_explained = False
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(3)
         self.setWindowTitle(APP_NAME)
@@ -1061,7 +1106,7 @@ class CompanionWindow(QMainWindow):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(event.rect(), QColor("#08182c"))
+        painter.fillRect(event.rect(), color("base"))
         painter.end()
         super().paintEvent(event)
 
@@ -1077,42 +1122,98 @@ class CompanionWindow(QMainWindow):
         self.appearance["background"] = root.background_id
         self.energy_hero = root
         self.setCentralWidget(root)
-        body = QVBoxLayout(root)
-        body.setContentsMargins(24, 15, 24, 17)
-        body.setSpacing(12)
+        shell = QHBoxLayout(root)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+
+        # Left navigation rail: brand, page navigation and the one global control.
+        rail = QFrame()
+        rail.setObjectName("Sidebar")
+        rail.setFixedWidth(RAIL_WIDTH)
+        rail_box = QVBoxLayout(rail)
+        rail_box.setContentsMargins(14, 18, 14, 16)
+        rail_box.setSpacing(4)
+        brand = DragBar()
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(6, 0, 0, 0)
+        brand_row.setSpacing(11)
+        brand_row.addWidget(Logo(36))
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(0)
+        brand_text.addWidget(_label(APP_NAME, "WindowBrand"))
+        brand_text.addWidget(_label("FASTORANGE COMPANION", "BrandSub"))
+        brand_row.addLayout(brand_text, 1)
+        rail_box.addWidget(brand)
+        rail_box.addSpacing(26)
+        rail_box.addWidget(_label("  工作台", "GroupTitle"))
+        rail_box.addSpacing(4)
+        self.nav = QButtonGroup(self)
+        self.nav.setExclusive(True)
+        for index, (text, kind) in enumerate((("主页", "overview"), ("运行记录", "activity"), ("设置", "settings"), ("关于", "about"), ("快橙", "vpn"))):
+            if index == 4:
+                rail_box.addSpacing(10)
+                rail_box.addWidget(_label("  客户端", "GroupTitle"))
+                rail_box.addSpacing(4)
+            button = _button(text, "Nav")
+            button.setCheckable(True)
+            button.setIcon(_nav_icon(kind))
+            button.setIconSize(QSize(17, 17))
+            button.setFixedHeight(40)
+            self.nav.addButton(button, index)
+            rail_box.addWidget(button)
+        self.nav.button(0).setChecked(True)
+        self.nav.idClicked.connect(self._navigate)
+        rail_box.addStretch()
+        dock = _card("Dock")
+        dock_box = QVBoxLayout(dock)
+        dock_box.setContentsMargins(12, 12, 12, 10)
+        dock_box.setSpacing(8)
+        dock_box.addWidget(_label("伴航会话", "GroupTitle"))
+        self.primary = _button("启动伴航", "Primary")
+        self.primary.setFixedHeight(46)
+        self.primary.clicked.connect(self._toggle)
+        dock_box.addWidget(self.primary)
+        dock_box.addWidget(_label(f"v{APP_VERSION}", "Version"), 0, Qt.AlignmentFlag.AlignHCenter)
+        rail_box.addWidget(dock)
+        shell.addWidget(rail)
+
+        # Workspace: context bar, page surface and a quiet status line.
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
         titlebar = DragBar()
+        titlebar.setFixedHeight(62)
         header = QHBoxLayout(titlebar)
-        header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(10)
-        header.addWidget(Logo(30))
-        header.addWidget(_label(APP_NAME, "WindowBrand"))
-        header.addSpacing(10)
-        self.page_title = _label("主页", "HeaderContext")
+        header.setContentsMargins(30, 0, 14, 0)
+        header.setSpacing(8)
+        self.page_title = _label("主页", "PageTitle")
         header.addWidget(self.page_title)
-        self.page_subtitle = _label("", "PageSubtitle")
-        self.page_subtitle.hide()
-        header.addStretch()
-        self.service_chip = _label("本地服务 · 正在连接", "Chip")
+        header.addSpacing(6)
+        self.page_subtitle = ElidedLabel("", "subtitle")
+        header.addWidget(self.page_subtitle, 1)
+        self.service_chip = StatusPill("本地服务 · 正在连接", "neutral", STATUS_RULES)
         header.addWidget(self.service_chip)
+        header.addSpacing(6)
         self.whitelist_button = _button("白名单", "Ghost", "Ctrl+L 打开；Ctrl+Shift+D 剪贴板直连；Ctrl+Shift+P 剪贴板 VPN")
-        self.whitelist_button.setMinimumHeight(31)
+        self.whitelist_button.setFixedHeight(32)
         self.whitelist_button.clicked.connect(self._open_whitelist)
         header.addWidget(self.whitelist_button)
         self.open_vpn = _button("打开快橙", "Ghost")
-        self.open_vpn.setMinimumHeight(31)
+        self.open_vpn.setFixedHeight(32)
         self.open_vpn.clicked.connect(self._open_vendor)
         header.addWidget(self.open_vpn)
         self.background_button = _button("后台", "Ghost", "继续保活与分流，将窗口收起至通知区")
-        self.background_button.setMinimumWidth(57)
+        self.background_button.setFixedHeight(32)
+        self.background_button.setMinimumWidth(56)
         self.background_button.clicked.connect(self._hide_to_tray)
         header.addWidget(self.background_button)
-        header.addSpacing(5)
+        header.addSpacing(4)
         for text, callback in (("−", self.showMinimized), ("□", self._maximize), ("×", self.close)):
             control = _button(text, "WindowControl")
-            control.setFixedSize(31, 30)
+            control.setFixedSize(30, 30)
             control.clicked.connect(callback)
             header.addWidget(control)
-        body.addWidget(titlebar)
+        column.addWidget(titlebar)
         self.pages = QStackedWidget()
         self.pages.addWidget(self._overview_page())
         self.pages.addWidget(self._activity_page())
@@ -1120,62 +1221,131 @@ class CompanionWindow(QMainWindow):
         self.pages.addWidget(self._about_page())
         self.pages.addWidget(self._vendor_page())
         self.page_transition = PageTransition(self.pages)
-        body.addWidget(self.pages, 1)
-        self.footer = _label("开启伴航后，关闭窗口会停止保活与分流，并恢复启动前的代理设置。", "Footer", True)
-        body.addWidget(self.footer)
-        bottom = _card("BottomBar")
-        bar = QHBoxLayout(bottom)
-        bar.setContentsMargins(9, 8, 10, 8)
-        bar.setSpacing(5)
-        self.nav = QButtonGroup(self)
-        self.nav.setExclusive(True)
-        for index, (text, kind) in enumerate((("主页", "overview"), ("运行记录", "activity"), ("设置", "settings"), ("关于", "about"), ("快橙", "vpn"))):
-            button = _button(text, "Nav")
-            button.setCheckable(True)
-            button.setIcon(_icon(kind, "#345271"))
-            button.setIconSize(QSize(17, 17))
-            button.setFixedHeight(40)
-            button.setMinimumWidth(100 if index != 1 else 119)
-            self.nav.addButton(button, index)
-            bar.addWidget(button)
-        self.nav.button(0).setChecked(True)
-        self.nav.idClicked.connect(self._navigate)
-        bar.addStretch()
-        bar.addWidget(_label(f"v{APP_VERSION}", "BottomVersion"))
-        bar.addSpacing(12)
-        self.primary = _button("启动伴航", "Primary")
-        self.primary.setMinimumWidth(148)
-        self.primary.setFixedHeight(43)
-        self.primary.clicked.connect(self._toggle)
-        bar.addWidget(self.primary)
-        body.addWidget(bottom)
+        surface = QWidget()
+        surface_box = QVBoxLayout(surface)
+        surface_box.setContentsMargins(30, 2, 30, 6)
+        surface_box.addWidget(self.pages)
+        column.addWidget(surface, 1)
+        status_bar = QFrame()
+        status_bar.setObjectName("StatusBar")
+        status_row = QHBoxLayout(status_bar)
+        status_row.setContentsMargins(30, 8, 30, 10)
+        self.footer = ElidedLabel("开启伴航后，关闭窗口会停止保活与分流，并恢复启动前的代理设置。", "caption", 2)
+        status_row.addWidget(self.footer)
+        column.addWidget(status_bar)
+        shell.addLayout(column, 1)
 
     def _maximize(self):
         self.showNormal() if self.isMaximized() else self.showMaximized()
         self.energy_hero.pulse()
 
     def _overview_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 16, 8, 6)
-        layout.setSpacing(10)
-        hintrow = QHBoxLayout()
-        hintrow.addWidget(_label("FASTORANGE  /  CONNECTION COMPANION", "SkyEyebrow"))
-        hintrow.addStretch()
-        self.route_chip = _label("等待启动", "Chip")
-        hintrow.addWidget(self.route_chip)
-        layout.addLayout(hintrow)
-        layout.addStretch(3)
-        self.hero_title = _label("准备就绪", "ConnectionHeadline")
-        layout.addWidget(self.hero_title)
-        self.hero_description = _label("启动后，国内访问走本地网络，海外访问通过快橙。", "SkyDescription", True)
-        self.hero_description.setMaximumWidth(640)
+        layout.setContentsMargins(0, 8, 0, 6)
+        layout.setSpacing(14)
+
+        # Headline block sits on the (optional, veiled) wallpaper band.
+        layout.addWidget(_label("FASTORANGE  ·  CONNECTION COMPANION", "Eyebrow"))
+        title_row = QHBoxLayout()
+        title_row.setSpacing(14)
+        self.hero_title = _label("准备就绪", "Headline")
+        title_row.addWidget(self.hero_title)
+        self.route_chip = StatusPill("等待启动", "neutral", STATUS_RULES)
+        title_row.addWidget(self.route_chip, 0, Qt.AlignmentFlag.AlignBottom)
+        title_row.addStretch()
+        layout.addLayout(title_row)
+        self.hero_description = _label("为使用系统代理的连接分流：国内直连，海外走快橙。", "Body", True)
+        self.hero_description.setMaximumWidth(620)
         layout.addWidget(self.hero_description)
-        layout.addSpacing(10)
-        info = _card("FrostInfo")
+        layout.addSpacing(4)
+
+        # Connection panel: honest route state for both directions + last message.
+        route_panel = _card("Panel")
+        route_box = QVBoxLayout(route_panel)
+        route_box.setContentsMargins(20, 14, 20, 12)
+        route_box.setSpacing(10)
+        route = QHBoxLayout()
+        route.setSpacing(0)
+        for caption, attr, text in (("国内线路", "physical_label", "国内 · 启动后直连"), ("海外线路", "foreign_label", "海外 · 快橙未连接")):
+            cell = QVBoxLayout()
+            cell.setSpacing(3)
+            cell.addWidget(_label(caption, "Caption"))
+            value = ElidedLabel(text, "lead", auto_tooltip=True)
+            setattr(self, attr, value)
+            cell.addWidget(value)
+            if attr == "foreign_label":
+                divider = QFrame()
+                divider.setObjectName("Divider")
+                divider.setFixedSize(1, 34)
+                route.addWidget(divider)
+                route.addSpacing(22)
+            route.addLayout(cell, 1)
+        route.addSpacing(12)
+        details = _button("查看记录 →", "TextButton")
+        details.clicked.connect(lambda: self._navigate(1))
+        route.addWidget(details)
+        route_box.addLayout(route)
+        rule = QFrame()
+        rule.setObjectName("Divider")
+        route_box.addWidget(rule)
+        self.message_label = ElidedLabel("服务就绪后，点击左下角「启动伴航」即可开始。", "muted", 2, auto_tooltip=True)
+        route_box.addWidget(self.message_label)
+        layout.addWidget(route_panel)
+
+        # Optional protections sit side by side; desired state is never shown as active.
+        features = QHBoxLayout()
+        features.setSpacing(14)
+        claude_entry = _card("Card")
+        claude_box = QVBoxLayout(claude_entry)
+        claude_box.setContentsMargins(18, 14, 18, 14)
+        claude_box.setSpacing(8)
+        claude_row = QHBoxLayout()
+        self.claude_protection_switch = ToggleSwitch("Claude 出口保护")
+        self.claude_protection_switch.setToolTip("仅保护已识别的原生 claude.exe；规则关闭伴航后仍继续生效。")
+        self.claude_protection_switch.clicked.connect(self._toggle_claude_protection)
+        claude_row.addWidget(self.claude_protection_switch)
+        claude_row.addStretch()
+        self.claude_protection_status = StatusPill("未开启", "neutral", STATUS_RULES)
+        claude_row.addWidget(self.claude_protection_status)
+        claude_box.addLayout(claude_row)
+        self.claude_protection_message = ElidedLabel("仅保护已识别的原生 claude.exe；仍在原项目终端手动运行 claude。关闭伴航后规则继续生效，需从此开关关闭。", "muted", 2, auto_tooltip=True)
+        claude_box.addWidget(self.claude_protection_message)
+        self.claude_protection_feedback = ElidedLabel("", "feedback", 2, hide_when_empty=True, auto_tooltip=True)
+        claude_box.addWidget(self.claude_protection_feedback)
+        claude_box.addStretch()
+        features.addWidget(claude_entry, 1)
+        wechat_entry = _card("Card")
+        wechat_box = QVBoxLayout(wechat_entry)
+        wechat_box.setContentsMargins(18, 14, 18, 14)
+        wechat_box.setSpacing(8)
+        wechat_row = QHBoxLayout()
+        self.wechat_direct_switch = ToggleSwitch("微信直连")
+        self.wechat_direct_switch.setToolTip("默认开启；是否已生效请查看旁边状态。关闭后微信跟随系统路线。")
+        self.wechat_direct_switch.clicked.connect(self._toggle_wechat_direct)
+        wechat_row.addWidget(self.wechat_direct_switch)
+        wechat_row.addStretch()
+        self.wechat_direct_status = StatusPill("需要安装 · 未生效", "warn", STATUS_RULES)
+        wechat_row.addWidget(self.wechat_direct_status)
+        wechat_box.addLayout(wechat_row)
+        self.wechat_direct_message = ElidedLabel("默认开启，组件尚未就绪。", "muted", 4, auto_tooltip=True)
+        wechat_box.addWidget(self.wechat_direct_message)
+        wechat_box.addStretch()
+        self.wechat_direct_install = _button("安装 / 修复", "Ghost")
+        self.wechat_direct_install.setFixedHeight(30)
+        self.wechat_direct_install.clicked.connect(lambda: self._request_wechat_direct(True))
+        wechat_box.addWidget(self.wechat_direct_install, 0, Qt.AlignmentFlag.AlignLeft)
+        features.addWidget(wechat_entry, 1)
+        layout.addLayout(features)
+
+        info = _card("Panel")
         box = QHBoxLayout(info)
-        box.setContentsMargins(17, 12, 17, 12)
-        box.setSpacing(18)
+        box.setContentsMargins(6, 0, 6, 0)
+        box.setSpacing(0)
         self.metrics = {}
         self.metrics_panel = info
         self._metrics_visible = None
@@ -1190,24 +1360,13 @@ class CompanionWindow(QMainWindow):
             ("errors", "连接异常", "累计记录", "errors", "#85749b"),
         ):
             metric = Metric(title, hint, kind, color)
-            metric.setMinimumHeight(79)
+            metric.setProperty("first", "true" if not self.metrics else "false")
             self.metrics[key] = metric
             box.addWidget(metric, 1)
         layout.addWidget(info)
-        route = QHBoxLayout()
-        route.setSpacing(20)
-        self.physical_label = _label("国内 · 启动后直连", "SkyDescription")
-        self.foreign_label = _label("海外 · 快橙未连接", "SkyDescription")
-        route.addWidget(self.physical_label)
-        route.addWidget(self.foreign_label)
-        route.addStretch()
-        details = _button("查看记录 →", "TextButton")
-        details.clicked.connect(lambda: self._navigate(1))
-        route.addWidget(details)
-        layout.addLayout(route)
-        self.message_label = _label("服务就绪后，点击「启动伴航」即可开始。", "SkyHint", True)
-        layout.addWidget(self.message_label)
-        return page
+        layout.addStretch(1)
+        scroll.setWidget(page)
+        return scroll
 
     def _set_metrics_visible(self, visible):
         if visible == self._metrics_visible:
@@ -1231,15 +1390,38 @@ class CompanionWindow(QMainWindow):
     def _activity_page(self):
         page = QWidget()
         box = QVBoxLayout(page)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(14)
+        box.setContentsMargins(0, 8, 0, 4)
+        box.setSpacing(12)
         header = QHBoxLayout()
+        header.setSpacing(10)
         header.addWidget(_label("会话日志", "SectionTitle"))
-        header.addStretch()
-        self.logs_count = _label("0 条", "Chip")
+        self.logs_count = StatusPill("0 条", "neutral")
         header.addWidget(self.logs_count)
+        header.addWidget(_label("连接、分流与恢复事件，仅显示最近的记录。", "Muted"), 1)
         box.addLayout(header)
-        box.addWidget(_label("查看连接、分流与恢复记录。只显示最近的运行事件。", "Muted", True))
+        diagnostics = _card()
+        diagnostic_box = QVBoxLayout(diagnostics)
+        diagnostic_box.setContentsMargins(18, 14, 18, 14)
+        diagnostic_box.setSpacing(6)
+        diagnostic_row = QHBoxLayout()
+        diagnostic_row.setSpacing(8)
+        self.diagnostics_status = _label("连接监测 · 等待状态", "CardTitle")
+        self.diagnostics_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        diagnostic_row.addWidget(self.diagnostics_status, 1)
+        self.diagnostics_deep_button = _button("深度记录", "Ghost", "点击后请求 Windows 管理员授权，仅用于补充本机诊断记录。")
+        self.diagnostics_deep_button.clicked.connect(self._start_deep_diagnostics)
+        diagnostic_row.addWidget(self.diagnostics_deep_button)
+        self.diagnostics_export_button = _button("导出诊断日志", "Ghost", "将已有记录保存为 ZIP；停止伴航后也可导出。")
+        self.diagnostics_export_button.clicked.connect(self._export_diagnostics)
+        diagnostic_row.addWidget(self.diagnostics_export_button)
+        diagnostic_box.addLayout(diagnostic_row)
+        diagnostic_box.addWidget(_label("普通监测随伴航启动，无需管理员。深度记录会请求 Windows 管理员授权。", "Muted", True))
+        self.diagnostics_message = _label("暂无诊断会话。", "Muted", True)
+        self.diagnostics_message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        diagnostic_box.addWidget(self.diagnostics_message)
+        self.diagnostics_feedback = _label("", "Feedback", True)
+        diagnostic_box.addWidget(self.diagnostics_feedback)
+        box.addWidget(diagnostics)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setPlaceholderText("暂无运行记录。启动伴航后，事件会显示在这里。")
@@ -1247,7 +1429,7 @@ class CompanionWindow(QMainWindow):
         self.log_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.log_view.customContextMenuRequested.connect(self._log_whitelist_menu)
         box.addWidget(self.log_view, 1)
-        self.session_label = _label("当前没有会话", "Muted", True)
+        self.session_label = _label("当前没有会话", "Caption", True)
         self.session_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         box.addWidget(self.session_label)
         return page
@@ -1256,9 +1438,12 @@ class CompanionWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         page = QWidget()
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         box = QVBoxLayout(page)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(14)
+        box.setContentsMargins(0, 8, 6, 8)
+        box.setSpacing(12)
+        box.addWidget(_label("外观", "GroupTitle"))
         appearance = _card()
         design = QVBoxLayout(appearance)
         design.setContentsMargins(18, 16, 18, 16)
@@ -1272,9 +1457,9 @@ class CompanionWindow(QMainWindow):
         self.theme_choices = QButtonGroup(self)
         self.theme_choices.setExclusive(True)
         for index, (mode, title) in enumerate((("dark", "黑夜"), ("light", "浅色"))):
-            choice = _button(title, "Nav")
+            choice = _button(title, "Ghost")
             choice.setCheckable(True)
-            choice.setFixedSize(80, 36)
+            choice.setFixedSize(76, 34)
             choice.setChecked(mode == self.appearance["theme"])
             self.theme_choices.addButton(choice, index)
             choice.clicked.connect(lambda checked=False, selected=mode: self._select_theme(selected))
@@ -1301,7 +1486,8 @@ class CompanionWindow(QMainWindow):
         design.addWidget(self.appearance_notice)
         self._update_background_caption()
         box.addWidget(appearance)
-        heading = _label("连接管理", "SectionTitle")
+        box.addSpacing(6)
+        heading = _label("连接管理", "GroupTitle")
         box.addWidget(heading)
         keepalive = _card()
         row = QHBoxLayout(keepalive)
@@ -1321,9 +1507,11 @@ class CompanionWindow(QMainWindow):
         routing_box.setContentsMargins(20, 18, 20, 18)
         routing_box.setSpacing(10)
         routing_box.addWidget(_label("临时国内分流", "CardTitle"))
-        routing_box.addWidget(_label("国内域名与国内 IP 从物理网卡直连；海外访问保持快橙出口。国内 DNS 经物理网络使用 HTTPS 查询，并按有效期缓存。", "Muted", True))
+        routing_box.addWidget(_label("进入伴航代理的国内域名与国内 IP 从物理网卡直连，海外请求使用快橙。微信等未经过代理的连接仍跟随系统路由，域名白名单不会强制改变这些应用的出口。", "Muted", True))
         routing_box.addWidget(_label("适用于遵循 Windows 系统代理的网页与应用。独立代理、SSH 与 UDP 应用由各自设置决定。", "Muted", True))
         box.addWidget(routing)
+        box.addSpacing(6)
+        box.addWidget(_label("白名单与后台", "GroupTitle"))
         whitelist = _card()
         whitelist_box = QHBoxLayout(whitelist)
         whitelist_box.setContentsMargins(20, 18, 20, 18)
@@ -1342,6 +1530,8 @@ class CompanionWindow(QMainWindow):
         behavior_box.addWidget(_label("关闭与后台运行", "CardTitle"))
         behavior_box.addWidget(_label("关闭窗口：停止本窗口启动的会话，恢复启动前设置，快橙继续运行。选择「后台运行」：保活与分流继续工作，可从通知区重新打开。", "Muted", True))
         box.addWidget(behavior)
+        box.addSpacing(6)
+        box.addWidget(_label("恢复", "GroupTitle"))
         recovery = _card()
         recovery_row = QHBoxLayout(recovery)
         recovery_row.setContentsMargins(20, 18, 20, 18)
@@ -1402,8 +1592,9 @@ class CompanionWindow(QMainWindow):
     def _apply_appearance_theme(self, mode):
         QApplication.instance().setProperty("appearanceTheme", mode)
         QApplication.instance().setStyleSheet(stylesheet_for(mode))
+        apply_application_palette(QApplication.instance(), mode)
         for index, kind in enumerate(("overview", "activity", "settings", "about", "vpn")):
-            self.nav.button(index).setIcon(_icon(kind, "#a1ccf4" if mode == "dark" else "#345271"))
+            self.nav.button(index).setIcon(_nav_icon(kind))
             self.nav.button(index).update()
         for metric in self.metrics.values():
             metric.update_theme()
@@ -1442,17 +1633,18 @@ class CompanionWindow(QMainWindow):
     def _about_page(self):
         page = QWidget()
         box = QVBoxLayout(page)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(17)
-        brand = _card("Hero")
+        box.setContentsMargins(0, 8, 0, 4)
+        box.setSpacing(14)
+        brand = _card("AboutHero")
         row = QHBoxLayout(brand)
-        row.setContentsMargins(27, 26, 27, 26)
-        row.setSpacing(21)
-        row.addWidget(Logo(80))
+        row.setContentsMargins(26, 22, 26, 22)
+        row.setSpacing(20)
+        row.addWidget(Logo(72))
         text = QVBoxLayout()
-        text.setSpacing(8)
-        text.addWidget(_label(APP_NAME, "HeroTitle"))
-        text.addWidget(_label("让连接更稳，让国内访问更顺畅。", "HeroDescription"))
+        text.setSpacing(5)
+        text.addWidget(_label("FASTORANGE  ·  CONNECTION COMPANION", "Eyebrow"))
+        text.addWidget(_label(APP_NAME, "AboutTitle"))
+        text.addWidget(_label("让连接更稳，让国内访问更顺畅。", "Body"))
         text.addWidget(_label(f"Windows 桌面版  ·  {APP_VERSION}", "Muted"))
         row.addLayout(text, 1)
         box.addWidget(brand)
@@ -1474,18 +1666,18 @@ class CompanionWindow(QMainWindow):
     def _vendor_page(self):
         page = QWidget()
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(8, 8, 8, 4)
-        layout.setSpacing(20)
+        layout.setContentsMargins(0, 8, 0, 4)
+        layout.setSpacing(22)
 
         info = QWidget()
-        info.setMaximumWidth(246)
+        info.setMaximumWidth(230)
         details = QVBoxLayout(info)
-        details.setContentsMargins(0, 12, 0, 0)
-        details.setSpacing(15)
-        details.addWidget(_label("FASTORANGE", "SkyEyebrow"))
-        details.addWidget(_label("快橙", "ConnectionHeadline"))
-        details.addWidget(_label("登录、选择线路和连接，\n都在这里完成。", "SkyDescription", True))
-        self.vendor_notice = _label("点击「在此打开」，显示快橙原界面。", "SkyHint", True)
+        details.setContentsMargins(0, 4, 0, 0)
+        details.setSpacing(12)
+        details.addWidget(_label("FASTORANGE", "Eyebrow"))
+        details.addWidget(_label("快橙", "VendorTitle"))
+        details.addWidget(_label("登录、选择线路和连接，\n都在这里完成。", "Body", True))
+        self.vendor_notice = _label("点击「在此打开」，显示快橙原界面。", "Feedback", True)
         details.addWidget(self.vendor_notice)
         self.vendor_embed_button = _button("在此打开", "Primary")
         self.vendor_embed_button.clicked.connect(self._request_vendor_embed)
@@ -1498,7 +1690,9 @@ class CompanionWindow(QMainWindow):
         expand.clicked.connect(lambda: self.showMaximized())
         details.addWidget(expand)
         details.addStretch()
-        details.addWidget(_label("账号由快橙管理。\n伴航继续负责保活与临时分流。", "SkyHint", True))
+        details.addWidget(_label("这里显示的是官方客户端，线路、会员与连接操作不变。点击「独立窗口」或关闭伴航，快橙会恢复成原来的窗口并继续运行。窗口较小时可使用「展开界面」。", "Caption", True))
+        details.addSpacing(4)
+        details.addWidget(_label("账号由快橙管理。\n伴航继续负责保活与临时分流。", "Caption", True))
         layout.addWidget(info)
 
         # Keep the official portrait window inside a dedicated screen area.
@@ -1518,26 +1712,12 @@ class CompanionWindow(QMainWindow):
         slot_title = _label("快橙原界面", "SectionTitle")
         slot_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.addWidget(slot_title)
-        slot_hint = _label("点击左侧「在此打开」\n区域较小时，点击「展开界面」", "SkyHint", True)
+        slot_hint = _label("点击左侧「在此打开」\n区域较小时，点击「展开界面」", "Muted", True)
         slot_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.addWidget(slot_hint)
         placeholder.addStretch()
         viewport.setWidget(self.vendor_host)
         layout.addWidget(viewport, 1)
-
-        hint = _card()
-        hint.setMaximumWidth(218)
-        side = QVBoxLayout(hint)
-        side.setContentsMargins(18, 20, 18, 20)
-        side.setSpacing(12)
-        side.addWidget(_label("保持原来的快橙", "CardTitle"))
-        side.addWidget(_label("这里显示的是官方客户端。线路、会员和连接操作与原来相同。", "Muted", True))
-        side.addSpacing(10)
-        side.addWidget(_label("随时独立打开", "CardTitle"))
-        side.addWidget(_label("点击「独立窗口」或关闭伴航，快橙会恢复成原来的窗口并继续运行。", "Muted", True))
-        side.addStretch()
-        side.addWidget(_label("窗口较小时，请扩大伴航窗口，或使用「独立窗口」。", "Muted", True))
-        layout.addWidget(hint)
         return page
 
     @Slot(str, bool)
@@ -1725,7 +1905,7 @@ class CompanionWindow(QMainWindow):
             return
         if action in self._tasks or self._closed:
             return
-        if action not in ("status", "initialize", "whitelist-list"):
+        if action not in ("status", "initialize", "whitelist-list", "diagnostics-export", "diagnostics-deep-start", "claude-protection-enable", "claude-protection-disable", "wechat-direct-enable", "wechat-direct-disable"):
             if self._busy_action:
                 if action.startswith("whitelist-") and self._whitelist_dialog is not None:
                     self._whitelist_dialog.show_error("正在处理其他操作，请稍后重试。")
@@ -1753,11 +1933,59 @@ class CompanionWindow(QMainWindow):
         task.signals.failed.connect(self._task_failed)
         task.signals.finished.connect(self._task_finished)
         self.pool.start(task)
+        if action.startswith(("diagnostics-", "claude-protection-", "wechat-direct-")):
+            self._render_controls()
 
     @Slot(str, object)
     def _task_succeeded(self, action, result):
         self._errors = 0
         self.service_chip.setText("本地服务 · 已连接")
+        if action.startswith("wechat-direct-"):
+            if isinstance(result, dict):
+                direct = result.get("wechat_direct")
+                if isinstance(direct, dict):
+                    self._status["wechat_direct"] = dict(direct)
+                message = result.get("message")
+            else:
+                message = None
+            self._wechat_direct_feedback = str(message or "操作已提交，请以微信直连状态为准。")
+            self._render_wechat_direct()
+            return
+        if action.startswith("claude-protection-"):
+            if isinstance(result, dict):
+                status = result.get("status")
+                if isinstance(status, dict) and "state" in status:
+                    self._apply_status(status)
+                else:
+                    protection = result.get("claude_protection")
+                    if not isinstance(protection, dict) and "enabled" in result:
+                        protection = result
+                    if isinstance(protection, dict):
+                        self._status["claude_protection"] = dict(protection)
+                message = result.get("message")
+            else:
+                message = None
+            _set_compact_label_text(self.claude_protection_feedback, message or "操作已提交，请以出口保护状态为准。")
+            return
+        if action.startswith("diagnostics-"):
+            if isinstance(result, dict):
+                status = result.get("status")
+                if isinstance(status, dict) and "state" in status:
+                    self._apply_status(status)
+                elif isinstance(result.get("diagnostics"), dict):
+                    self._status["diagnostics"] = dict(result["diagnostics"])
+                    self._apply_diagnostics(result["diagnostics"])
+                path = result.get("path") or result.get("export_path")
+                if action == "diagnostics-export":
+                    message = result.get("message") or (f"诊断日志已保存：{path}" if path else "诊断日志已导出。")
+                    if result.get("omissions"):
+                        message += " 部分记录未包含，详见压缩包说明。"
+                else:
+                    message = result.get("message") or "已提交深度记录请求，请完成 Windows 管理员授权。"
+            else:
+                message = "诊断操作已完成。"
+            self.diagnostics_feedback.setText(str(message))
+            return
         if action.startswith("whitelist-"):
             if self._whitelist_dialog is not None and (action != "whitelist-list" or self._whitelist_list_epoch == self._whitelist_mutation_epoch):
                 self._whitelist_dialog.apply_document(result)
@@ -1794,6 +2022,16 @@ class CompanionWindow(QMainWindow):
 
     @Slot(str, str)
     def _task_failed(self, action, message):
+        if action.startswith("wechat-direct-"):
+            self._wechat_direct_feedback = f"微信直连操作未完成：{message}"
+            self._render_wechat_direct()
+            return
+        if action.startswith("claude-protection-"):
+            _set_compact_label_text(self.claude_protection_feedback, f"出口保护操作未完成：{message}")
+            return
+        if action.startswith("diagnostics-"):
+            self.diagnostics_feedback.setText(f"诊断操作未完成：{message}")
+            return
         if action.startswith("whitelist-"):
             if self._whitelist_dialog is not None:
                 self._whitelist_dialog.show_error(message)
@@ -1847,9 +2085,9 @@ class CompanionWindow(QMainWindow):
         self._set_metrics_visible(state != "stopped")
         self.energy_hero.set_connection(state, connected)
         descriptions = {
-            "stopped": "启动后，国内访问走本地网络，海外访问通过快橙。",
+            "stopped": "为使用系统代理的连接分流：国内直连，海外走快橙。",
             "starting": "正在准备临时分流与连接保活，请稍候。",
-            "running": "国内直连正在运行，海外访问保持快橙出口。" if connected else "国内分流已启用，等待快橙完成连接。",
+            "running": "代理分流已启用：国内直连，海外走快橙。" if connected else "代理分流已启用，等待快橙完成连接。",
             "stopping": "正在停止保活与分流，并恢复启动前的代理设置。",
             "error": status.get("message") or "查看运行记录，了解当前会话的状态。",
         }
@@ -1861,6 +2099,7 @@ class CompanionWindow(QMainWindow):
         self.foreign_label.setText("快橙已连接" if connected else "快橙未连接" if status.get("vpn_running") else "快橙未运行")
         self.message_label.setText(status.get("message") or ("保活暂停期间，国内分流仍继续运行。" if paused else "临时会话已启动，关闭窗口可停止并恢复。" if state == "running" else "点击「启动伴航」开始保活与分流。"))
         self.session_label.setText(f"会话目录：{status['session_path']}" if status.get("session_path") else "当前没有会话")
+        self._apply_diagnostics(status.get("diagnostics"))
         self.open_vpn.setText("快橙" if status.get("vendor_installed", True) else "安装快橙")
         logs = [str(line) for line in status.get("logs", []) or []][-300:]
         if logs != self._last_logs:
@@ -1899,6 +2138,16 @@ class CompanionWindow(QMainWindow):
         self.pause_button.setText("恢复保活" if self._status.get("paused") else "暂停保活")
         self.restore_button.setEnabled(state in ("stopped", "error") and not active)
         self.background_button.setEnabled(not self._closing)
+        self._render_claude_protection()
+        self._render_wechat_direct()
+        self.diagnostics_export_button.setEnabled(not self._closing and "diagnostics-export" not in self._tasks)
+        self.diagnostics_export_button.setText("正在导出…" if "diagnostics-export" in self._tasks else "导出诊断日志")
+        diagnostics = self._status.get("diagnostics") or {}
+        deep_state = str(diagnostics.get("deep_state") or "").lower()
+        deep_running = deep_state in ("starting", "pending", "requesting", "recording", "running", "active")
+        self.diagnostics_deep_button.setEnabled(bool(diagnostics.get("active")) and not deep_running and not self._closing and "diagnostics-deep-start" not in self._tasks)
+        waiting_for_authorization = deep_state in ("starting", "pending", "requesting") or "diagnostics-deep-start" in self._tasks
+        self.diagnostics_deep_button.setText("等待授权…" if waiting_for_authorization else "深度记录中" if deep_running else "深度记录")
         self.tray_toggle.setText("停止并恢复" if working else "启动伴航")
         self.tray_toggle.setEnabled(not active)
         self.tray.setToolTip(f"{APP_NAME} · {self.hero_title.text()}")
@@ -1906,6 +2155,175 @@ class CompanionWindow(QMainWindow):
     def _toggle(self):
         state = self._status.get("state", "stopped")
         self._submit("stop" if state in ("running", "starting", "stopping") or self._owned else "start")
+
+    def _render_wechat_direct(self):
+        direct = self._status.get("wechat_direct")
+        direct = direct if isinstance(direct, dict) else {}
+        desired = direct.get("desired_enabled", True) is True
+        state = str(direct.get("state") or "not-installed")
+        pending = state == "pending" or any(action.startswith("wechat-direct-") for action in self._tasks)
+        self.wechat_direct_switch.setChecked(desired)
+        self.wechat_direct_switch.setEnabled(not pending and not self._closing)
+        if pending:
+            title = "处理中 · 未确认"
+        elif state == "running" and direct.get("enabled") is True:
+            title = "已生效 · 微信直连"
+        elif state in ("not-installed", "needs-setup"):
+            title = "需要安装 · 未生效"
+        elif state == "checking":
+            title = "正在核验 · 未确认"
+        elif state == "disabled" and not desired:
+            title = "已关闭 · 跟随系统"
+        elif state == "error":
+            title = "异常 · 未确认"
+        else:
+            title = "待启用 · 未生效"
+        self.wechat_direct_status.setText(title)
+        self.wechat_direct_install.setVisible(state in ("not-installed", "needs-setup", "error"))
+        self.wechat_direct_install.setEnabled(not pending and not self._closing)
+        message = str(direct.get("message") or ("默认开启，组件尚未就绪。" if desired else "关闭后微信跟随系统路线。"))
+        if direct.get("interface_name"):
+            message += f" 当前接口：{direct['interface_name']}。"
+        self.wechat_direct_status.setToolTip(message)
+        _set_compact_label_text(self.wechat_direct_message, self._wechat_direct_feedback or message, limit=60)
+
+    def _toggle_wechat_direct(self, _checked=False):
+        direct = self._status.get("wechat_direct") or {}
+        desired = direct.get("desired_enabled", True) is True
+        self._render_wechat_direct()
+        self._request_wechat_direct(not desired)
+
+    def _request_wechat_direct(self, enable):
+        self._render_wechat_direct()
+        if self.preview:
+            self._wechat_direct_feedback = "界面预览不会安装组件或修改网络。"
+            self._render_wechat_direct()
+            return
+        if self._closed or not self.wechat_direct_switch.isEnabled():
+            return
+        direct = self._status.get("wechat_direct") or {}
+        desired = direct.get("desired_enabled", True) is True
+        if enable and direct.get("state", "not-installed") in ("not-installed", "needs-setup", "error") and not self._wechat_install_explained:
+            answer = QMessageBox.question(
+                self, "安装微信直连组件",
+                "安装 / 修复按应用分流组件需要 Windows 管理员授权，期间可能短暂断网。\n"
+                "此功能只为微信（Weixin）选择直连，原 VPN 保持不变；关闭后恢复跟随系统路线。\n"
+                "不会启动或退出微信，也不会启动 Claude。是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self._wechat_install_explained = True
+        current = self._status.get("wechat_direct") or {}
+        if self._closing or self._closed or current.get("state") == "pending" or any(action.startswith("wechat-direct-") for action in self._tasks) or (current.get("desired_enabled", True) is True) != desired:
+            self._wechat_direct_feedback = "微信直连状态已变化，请确认后重试。"
+            self._render_wechat_direct()
+            return
+        self._wechat_direct_feedback = "正在启用微信直连…" if enable else "正在恢复微信跟随系统路线…"
+        self._submit("wechat-direct-enable" if enable else "wechat-direct-disable")
+
+    def _render_claude_protection(self):
+        protection = self._status.get("claude_protection")
+        protection = protection if isinstance(protection, dict) else {}
+        state = str(protection.get("state") or "disabled")
+        pending = state == "pending" or any(action.startswith("claude-protection-") for action in self._tasks)
+        checking = state == "checking"
+        self.claude_protection_switch.setChecked(protection.get("enabled") is True and not checking)
+        self.claude_protection_switch.setEnabled(not pending and not checking and not self._closing)
+        titles = {"enabled": "已开启", "disabled": "未开启", "pending": "等待授权 / 处理中", "error": "需要检查"}
+        title = "正在核验" if checking else "等待授权 / 处理中" if pending else titles.get(state, "状态待确认")
+        if state == "enabled" and protection.get("enabled") is not True:
+            title = "状态待确认"
+        self.claude_protection_status.setText(title)
+        message = "仅保护已识别的原生 claude.exe；仍在原项目终端手动运行 claude。关闭伴航后规则继续生效，需从此开关关闭。"
+        if protection.get("message"):
+            message += " " + str(protection["message"])
+        if protection.get("interface_name"):
+            message += f" 当前接口：{protection['interface_name']}。"
+        apps = protection.get("apps")
+        if isinstance(apps, list) and apps:
+            message += f" 已识别 {len(apps)} 个程序。"
+        _set_compact_label_text(self.claude_protection_message, message)
+
+    def _toggle_claude_protection(self, _checked=False):
+        self._render_claude_protection()
+        if self.preview:
+            _set_compact_label_text(self.claude_protection_feedback, "界面预览不会修改出口保护或请求管理员授权。")
+            return
+        if not self.claude_protection_switch.isEnabled():
+            return
+        protection = self._status.get("claude_protection") or {}
+        enabling = protection.get("enabled") is not True
+        message = (
+            "请先退出所有已有 Claude 会话，再开启保护；已建立的连接不一定能追溯拦截。\n\n"
+            "请确认：当前已在快橙选择新加坡节点。程序不会自动验证节点国家。\n\n"
+            "仅保护已识别的原生 claude.exe，不覆盖 Node 脚本版。若经其它本地代理转发，"
+            "此开关无法保证代理程序的出口。\n\n"
+            "需要 Windows 管理员授权。规则持续生效，关闭伴航不会解除，需从此开关关闭。\n\n"
+            "此操作不会启动 Claude、读取凭据或切换节点，也不会更改命令路径或项目目录；"
+            "你仍在原项目终端手动运行 claude。本机出口保护不能保证账号风控结果。"
+            if enabling else
+            "关闭出口保护需要 Windows 管理员授权，仅移除伴航自建的保护规则。\n"
+            "这些规则不会随伴航关闭而自动移除。此操作不会启动或关闭 Claude，也不会切换节点。"
+        )
+        answer = QMessageBox.question(
+            self, "开启 Claude 出口保护" if enabling else "关闭 Claude 出口保护", message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        current = self._status.get("claude_protection") or {}
+        if self._closing or self._closed or current.get("state") in ("pending", "checking") or any(action.startswith("claude-protection-") for action in self._tasks) or (current.get("enabled") is True) != (not enabling):
+            _set_compact_label_text(self.claude_protection_feedback, "出口保护状态已变化，请确认状态后重试。")
+            return
+        _set_compact_label_text(self.claude_protection_feedback, "正在请求 Windows 管理员授权…")
+        self._submit("claude-protection-enable" if enabling else "claude-protection-disable", {"singapore_confirmed": True} if enabling else None)
+
+    def _apply_diagnostics(self, diagnostics):
+        diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+        if diagnostics.get("state") in ("error", "failed", "stale", "unknown"):
+            title = "连接监测 · 需要检查"
+        elif diagnostics.get("active"):
+            title = "连接监测 · 记录中"
+        elif diagnostics.get("session_path"):
+            title = "连接监测 · 已保留记录"
+        else:
+            title = "连接监测 · 未启动"
+        if diagnostics.get("incident_at"):
+            title += " · 已捕获异常"
+        self.diagnostics_status.setText(title)
+        details = str(diagnostics.get("message") or ("本机记录可用于排查连接中断。" if diagnostics else "暂无诊断会话。"))
+        if diagnostics.get("incident_at"):
+            details += f" 异常时间：{diagnostics['incident_at']}"
+        self.diagnostics_message.setText(details)
+        self.diagnostics_message.setToolTip(str(diagnostics.get("session_path") or ""))
+
+    def _export_diagnostics(self):
+        if self.preview:
+            self.diagnostics_feedback.setText("界面预览不会导出日志。")
+            return
+        if self._closing or "diagnostics-export" in self._tasks:
+            return
+        default = Path.home() / ("伴航诊断-" + time.strftime("%Y%m%d-%H%M%S") + ".zip")
+        selected, _ = QFileDialog.getSaveFileName(self, "导出诊断日志", str(default), "ZIP 压缩包 (*.zip)")
+        if not selected:
+            return
+        path = Path(selected).expanduser().absolute()
+        if path.suffix.lower() != ".zip":
+            path = Path(str(path) + ".zip")
+        self.diagnostics_feedback.setText("正在整理本机诊断记录…")
+        self._submit("diagnostics-export", {"path": str(path)})
+
+    def _start_deep_diagnostics(self):
+        if self.preview:
+            self.diagnostics_feedback.setText("界面预览不会请求管理员授权。")
+            return
+        if not self.diagnostics_deep_button.isEnabled():
+            return
+        self.diagnostics_feedback.setText("正在请求 Windows 管理员授权；普通监测会继续运行。")
+        self._submit("diagnostics-deep-start")
 
     def _open_vendor(self):
         if self.pages.currentIndex() == 4:

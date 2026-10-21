@@ -10,6 +10,14 @@ namespace FastOrangeCombined.Tests
 
     public static class WhitelistBridgeHarness
     {
+        private sealed class LoopbackVpnGuard : IVpnGuard
+        {
+            public bool IsLive(VpnBinding binding, IPAddress target)
+            { return binding != null && IPAddress.IsLoopback(binding.Address) && (target == null || IPAddress.IsLoopback(target)); }
+            public void Bind(Socket socket, VpnBinding binding) { socket.Bind(new IPEndPoint(IPAddress.Loopback, 0)); }
+            public bool IsBound(Socket socket, VpnBinding binding)
+            { return IPAddress.IsLoopback(((IPEndPoint)socket.LocalEndPoint).Address); }
+        }
         private static int checks;
         private static void Check(bool condition, string name)
         { if (!condition) throw new Exception("FAIL " + name); checks++; Console.WriteLine("PASS " + name); }
@@ -102,9 +110,9 @@ namespace FastOrangeCombined.Tests
             echo.BeginAcceptTcpClient(EchoAccept, echo);
             try
             {
-                using (BridgeServer bridge = new BridgeServer(policy, "whitelisttests123"))
+                using (BridgeServer bridge = new BridgeServer(policy, "whitelisttests123", new LoopbackVpnGuard()))
                 {
-                    int port = bridge.Start(); bridge.Configure(0, true);
+                    int port = bridge.Start(); bridge.Configure(0, 1, "00000000-0000-0000-0000-000000000001", "127.0.0.1");
                     using (TcpClient active = Tunnel(port, echoPort, "127.0.0.1"))
                     {
                         Echo(active, "before-refresh");

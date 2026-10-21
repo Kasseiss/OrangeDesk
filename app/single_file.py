@@ -7,7 +7,7 @@ import os
 import sys
 
 CLI_COMMANDS = frozenset({"ui", "start", "stop", "shutdown", "status", "pause", "resume",
-                          "open-vpn", "install-vpn", "restore", "logs", "whitelist", "version"})
+                          "open-vpn", "install-vpn", "restore", "logs", "whitelist", "diagnostics", "claude-protection", "wechat-direct", "version"})
 
 
 def prepare_console() -> None:

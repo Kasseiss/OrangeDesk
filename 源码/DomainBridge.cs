@@ -8,6 +8,8 @@ using System.IO;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
 using System.Security.Authentication;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -23,7 +25,7 @@ namespace FastOrangeCombined
         private readonly List<IpRange> ranges = new List<IpRange>();
         private readonly string[] vpnSuffixes = new string[] {
             "chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com",
-            "claude.ai", "anthropic.com"
+            "claude.ai", "claude.com", "anthropic.com"
         };
         public int RuleCount { get; private set; }
         public int PrefixCount { get; private set; }
@@ -241,6 +243,79 @@ namespace FastOrangeCombined
         }
     }
 
+    // Internal seams are compiled with the loopback test harness, never exposed as a
+    // production bypass. A binding identifies one adapter incarnation and address.
+    internal sealed class VpnBinding
+    {
+        internal readonly int Index;
+        internal readonly string Guid;
+        internal readonly IPAddress Address;
+        internal readonly long Generation;
+        internal VpnBinding(int index, string guid, IPAddress address, long generation)
+        { Index = index; Guid = guid; Address = address; Generation = generation; }
+    }
+
+    internal interface IVpnGuard
+    {
+        bool IsLive(VpnBinding binding, IPAddress target);
+        void Bind(Socket socket, VpnBinding binding);
+        bool IsBound(Socket socket, VpnBinding binding);
+    }
+
+    internal sealed class WindowsVpnGuard : IVpnGuard
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SockAddrV4
+        { internal ushort Family; internal ushort Port; internal uint Address; internal ulong Padding; }
+        [DllImport("iphlpapi.dll")]
+        private static extern uint GetBestInterfaceEx(ref SockAddrV4 destination, out uint bestIndex);
+
+        internal static bool BestInterfaceIs(int interfaceIndex, IPAddress target)
+        {
+            if (target == null || target.AddressFamily != AddressFamily.InterNetwork) return false;
+            SockAddrV4 destination = new SockAddrV4 { Family = 2, Address = BitConverter.ToUInt32(target.GetAddressBytes(), 0) };
+            uint bestIndex;
+            return GetBestInterfaceEx(ref destination, out bestIndex) == 0 && bestIndex == (uint)interfaceIndex;
+        }
+
+        public bool IsLive(VpnBinding binding, IPAddress target)
+        {
+            if (binding == null) return false;
+            try
+            {
+                bool found = false;
+                foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (!String.Equals(nic.Id.Trim('{', '}'), binding.Guid, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (nic.OperationalStatus != OperationalStatus.Up || nic.Description.IndexOf("TAP-Windows", StringComparison.OrdinalIgnoreCase) < 0) return false;
+                    IPInterfaceProperties properties = nic.GetIPProperties();
+                    if (properties.GetIPv4Properties().Index != binding.Index) return false;
+                    foreach (UnicastIPAddressInformation address in properties.UnicastAddresses)
+                        if (address.Address.Equals(binding.Address)) { found = true; break; }
+                    break;
+                }
+                if (!found) return false;
+                if (target != null)
+                {
+                    if (!BestInterfaceIs(binding.Index, target)) return false;
+                }
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        public void Bind(Socket socket, VpnBinding binding)
+        {
+            socket.SetSocketOption(SocketOptionLevel.IP, (SocketOptionName)31, IPAddress.HostToNetworkOrder(binding.Index));
+            socket.Bind(new IPEndPoint(binding.Address, 0));
+        }
+        public bool IsBound(Socket socket, VpnBinding binding)
+        {
+            try { return ((IPEndPoint)socket.LocalEndPoint).Address.Equals(binding.Address); }
+            catch (Exception) { return false; }
+        }
+    }
+
     public sealed class BridgeServer : IDisposable
     {
         private const int MaxConnections = 128;
@@ -254,7 +329,9 @@ namespace FastOrangeCombined
         private TcpListener listener;
         private bool running;
         private int nextId, physicalIndex;
-        private bool vpnReady;
+        private readonly IVpnGuard vpnGuard;
+        private VpnBinding vpnBinding;
+        private long bindingGeneration;
         private long directCount, vpnCount, errorCount;
         public int Port { get; private set; }
         public string PacUrl { get { return "http://127.0.0.1:" + Port.ToString(CultureInfo.InvariantCulture) + "/fastorange/" + token + "/proxy.pac"; } }
@@ -264,11 +341,15 @@ namespace FastOrangeCombined
         public int ActiveCount { get { lock (gate) return sessions.Count; } }
 
         public BridgeServer(DomainPolicy policy, string sessionToken)
+            : this(policy, sessionToken, new WindowsVpnGuard()) { }
+
+        internal BridgeServer(DomainPolicy policy, string sessionToken, IVpnGuard guard)
         {
             if (policy == null) throw new ArgumentNullException("policy");
             if (String.IsNullOrEmpty(sessionToken) || !Regex.IsMatch(sessionToken, "^[A-Za-z0-9_-]{8,128}$"))
                 throw new ArgumentException("Session token must be 8-128 URL-safe characters.", "sessionToken");
-            this.policy = policy; token = sessionToken;
+            if (guard == null) throw new ArgumentNullException("guard");
+            this.policy = policy; token = sessionToken; vpnGuard = guard;
         }
 
         public int Start()
@@ -285,17 +366,46 @@ namespace FastOrangeCombined
 
         public void Configure(int physicalInterfaceIndex, bool isVpnReady)
         {
+            // A historical bool is not proof of an enforceable VPN binding.
+            Configure(physicalInterfaceIndex, -1, "", "");
+        }
+
+        public void Configure(int physicalInterfaceIndex, int vpnInterfaceIndex, string vpnGuid, string vpnAddress)
+        {
             if (physicalInterfaceIndex < -1) throw new ArgumentOutOfRangeException("physicalInterfaceIndex");
+            IPAddress address = null; Guid parsedGuid;
+            bool valid = vpnInterfaceIndex > 0 && System.Guid.TryParse(vpnGuid, out parsedGuid) &&
+                IPAddress.TryParse(vpnAddress, out address) && address.AddressFamily == AddressFamily.InterNetwork && !address.Equals(IPAddress.Any);
+            string guid = valid ? System.Guid.Parse(vpnGuid).ToString("D") : "";
             List<Session> close = new List<Session>();
             lock (gate)
             {
                 if (physicalIndex != physicalInterfaceIndex) resolver.ChangeInterface();
-                if (physicalIndex != physicalInterfaceIndex || (vpnReady && !isVpnReady))
-                    foreach (Session session in sessions.Values)
-                        if ((session.Direct && physicalIndex != physicalInterfaceIndex) || (!session.Direct && !isVpnReady)) close.Add(session);
-                physicalIndex = physicalInterfaceIndex; vpnReady = isVpnReady;
+                bool changed = valid ? vpnBinding == null || vpnBinding.Index != vpnInterfaceIndex ||
+                    vpnBinding.Guid != guid || !vpnBinding.Address.Equals(address) : vpnBinding != null;
+                foreach (Session session in sessions.Values)
+                    if ((session.Direct && physicalIndex != physicalInterfaceIndex) || (!session.Direct && changed)) close.Add(session);
+                physicalIndex = physicalInterfaceIndex;
+                if (changed) vpnBinding = valid ? new VpnBinding(vpnInterfaceIndex, guid, address, ++bindingGeneration) : null;
             }
             foreach (Session session in close) session.Close();
+        }
+
+        private bool ValidateVpn(VpnBinding binding, IPAddress target)
+        {
+            lock (gate) { if (binding == null || !Object.ReferenceEquals(binding, vpnBinding)) return false; }
+            if (!vpnGuard.IsLive(binding, target)) return false;
+            lock (gate) { return Object.ReferenceEquals(binding, vpnBinding); }
+        }
+
+        private string VpnStatusJson()
+        {
+            VpnBinding binding; lock (gate) { binding = vpnBinding; }
+            bool ready = ValidateVpn(binding, null);
+            return "{\"vpnBindingEnforced\":true,\"pacDirectFallback\":false,\"vpnReady\":" + (ready ? "true" : "false") +
+                ",\"claudeRouteIsVpn\":" + (!policy.IsDirect("api.anthropic.com") && !policy.IsDirect("claude.ai") && !policy.IsDirect("platform.claude.com") ? "true" : "false") +
+                ",\"vpnInterfaceIndex\":" + (binding == null ? -1 : binding.Index).ToString(CultureInfo.InvariantCulture) +
+                ",\"vpnAddress\":\"" + (binding == null ? "" : binding.Address.ToString()) + "\"}";
         }
 
         public string[] DrainEvents()
@@ -370,6 +480,8 @@ namespace FastOrangeCombined
             private string dnsSource;
             private string overrideMode;
             private bool forcedVpn;
+            private VpnBinding binding;
+            private IPAddress vpnTarget;
             private BodyLimit body;
             private DateTime connectDeadline;
             private long dnsStarted, tcpStarted;
@@ -386,6 +498,8 @@ namespace FastOrangeCombined
             private bool IsTerminating { get { return Interlocked.CompareExchange(ref terminating, 0, 0) != 0; } }
             private void CheckTimeout(object unused)
             {
+                if (!IsClosed && !IsTerminating && !Direct && binding != null && !owner.ValidateVpn(binding, vpnTarget))
+                { Fail(503, "vpn-binding-unavailable"); return; }
                 if (!IsClosed && DateTime.UtcNow.Ticks - Interlocked.Read(ref touched) > TimeSpan.FromSeconds(timeoutSeconds).Ticks)
                 { if (IsTerminating) Close(); else Fail(504, "timeout"); }
             }
@@ -425,9 +539,11 @@ namespace FastOrangeCombined
                 if (first.Length != 3 || (first[2] != "HTTP/1.1" && first[2] != "HTTP/1.0") || !Regex.IsMatch(first[0], "^[A-Z]+$")) throw new FormatException();
                 if (first[0] == "GET" && first[1] == "/fastorange/" + owner.token + "/proxy.pac")
                 {
-                    string pac = "function FindProxyForURL(url, host) { host = host.toLowerCase(); if (host == 'localhost' || host == '127.0.0.1' || host == '::1' || host == '[::1]') return 'DIRECT'; return 'PROXY 127.0.0.1:" + owner.Port.ToString(CultureInfo.InvariantCulture) + "; DIRECT'; }\n";
+                    string pac = "function FindProxyForURL(url, host) { host = host.toLowerCase(); if (host == 'localhost' || host == '127.0.0.1' || host == '::1' || host == '[::1]') return 'DIRECT'; return 'PROXY 127.0.0.1:" + owner.Port.ToString(CultureInfo.InvariantCulture) + "'; }\n";
                     Respond(200, "OK", "application/x-ns-proxy-autoconfig", pac); return;
                 }
+                if (first[0] == "GET" && first[1] == "/fastorange/" + owner.token + "/vpn-status.json")
+                { Respond(200, "OK", "application/json", owner.VpnStatusJson()); return; }
                 tunnel = first[0] == "CONNECT";
                 string origin = null;
                 if (tunnel)
@@ -486,7 +602,8 @@ namespace FastOrangeCombined
                     Buffer.BlockCopy(leftover, 0, initial, rewrittenBytes.Length, accepted);
                 }
                 Direct = owner.policy.SelectRoute(host, out overrideMode, out forcedVpn);
-                lock (owner.gate) { interfaceIndex = owner.physicalIndex; if (!Direct && !owner.vpnReady) { Fail(503, "vpn-not-ready"); return; } }
+                lock (owner.gate) { interfaceIndex = owner.physicalIndex; binding = owner.vpnBinding; }
+                if (!Direct && !owner.ValidateVpn(binding, null)) { Fail(503, "vpn-not-ready"); return; }
                 if (Direct && interfaceIndex <= 0 && (interfaceIndex < 0 || literal == null || !IPAddress.IsLoopback(literal)))
                 { Fail(503, "physical-interface-unavailable"); return; }
                 timeoutSeconds = 10; Touch(); dnsStarted = Stopwatch.GetTimestamp();
@@ -522,8 +639,9 @@ namespace FastOrangeCombined
                 }
                 lock (owner.gate)
                 {
-                    if ((!Direct && !owner.vpnReady) || (Direct && owner.physicalIndex != interfaceIndex)) { Fail(503, "network-changed"); return; }
+                    if (Direct && owner.physicalIndex != interfaceIndex) { Fail(503, "network-changed"); return; }
                 }
+                if (!Direct && !owner.ValidateVpn(binding, null)) { Fail(503, "vpn-binding-unavailable"); return; }
                 if (Direct && interfaceIndex <= 0)
                 {
                     foreach (IPAddress address in resolved)
@@ -539,6 +657,8 @@ namespace FastOrangeCombined
                 if (IsClosed || IsTerminating) return;
                 if (addressIndex >= addresses.Length || DateTime.UtcNow >= connectDeadline) { Fail(502, "connect-failed"); return; }
                 IPAddress address = addresses[addressIndex++];
+                if (!Direct && !owner.ValidateVpn(binding, address)) { Fail(503, "vpn-binding-unavailable"); return; }
+                vpnTarget = address;
                 Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
                 upstream = socket;
                 try
@@ -548,6 +668,11 @@ namespace FastOrangeCombined
                     {
                         if (interfaceIndex <= 0 && !IPAddress.IsLoopback(address)) throw new InvalidOperationException("Physical interface unavailable.");
                         if (interfaceIndex > 0 && !IPAddress.IsLoopback(address)) socket.SetSocketOption(SocketOptionLevel.IP, (SocketOptionName)31, IPAddress.HostToNetworkOrder(interfaceIndex));
+                    }
+                    else
+                    {
+                        try { owner.vpnGuard.Bind(socket, binding); }
+                        catch (Exception) { SafeClose(socket); Fail(503, "vpn-bind-failed"); return; }
                     }
                     socket.BeginConnect(new IPEndPoint(address, destinationPort), delegate(IAsyncResult result)
                     {
@@ -564,8 +689,10 @@ namespace FastOrangeCombined
                 if (IsClosed || IsTerminating) return;
                 lock (owner.gate)
                 {
-                    if ((!Direct && !owner.vpnReady) || (Direct && owner.physicalIndex != interfaceIndex)) { Fail(503, "network-changed"); return; }
+                    if (Direct && owner.physicalIndex != interfaceIndex) { Fail(503, "network-changed"); return; }
                 }
+                if (!Direct && (!owner.ValidateVpn(binding, address) || !owner.vpnGuard.IsBound(upstream, binding)))
+                { Fail(503, "vpn-binding-unavailable"); return; }
                 string sourceIp = "unknown";
                 try { sourceIp = ((IPEndPoint)upstream.LocalEndPoint).Address.ToString(); } catch (Exception) { }
                 if (Direct) Interlocked.Increment(ref owner.directCount); else Interlocked.Increment(ref owner.vpnCount);

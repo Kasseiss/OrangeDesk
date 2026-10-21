@@ -26,7 +26,7 @@ try {
         Initialize-Bridge
         $policy=[FastOrangeCombined.DomainPolicy]::new((Read-DomainRules),((Read-ChinaPrefixes) -join "`n"))
         $bridge=[FastOrangeCombined.BridgeServer]::new($policy,[guid]::NewGuid().ToString('N'))
-        $port=$bridge.Start(); $target=Get-BrowserTarget; $bridge.Configure($target.Index,$target.VpnReady)
+        $port=$bridge.Start(); $target=Get-BrowserTarget; $bridge.Configure($target.Index,$target.VpnIndex,$target.VpnGuid,$target.VpnAddress)
         $proxyUrl='http://127.0.0.1:'+$port; $mode='new-standalone-bridge'
     }
     $caseProxies=@($proxyUrl)

@@ -23,8 +23,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .whitelist import WhitelistStore, WhitelistError, normalize_target
 from .storage import state_root, migrate_preferences
+from .diagnostics import NetworkDiagnostics
+from .claude_protection import ClaudeProtection, ProtectionError
+from .wechat_direct import WeChatDirect, WeChatDirectError
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.3"
 FILETIME_TO_DOTNET = 504911232000000000
 IDLE_SECONDS = 120
 
@@ -437,6 +440,16 @@ class Coordinator:
         self._state = "stopped"
         self._message = "准备就绪。点击启动后才会启用保活与分流。"
         self._last_rpc = time.monotonic()
+        self._diagnostics = NetworkDiagnostics(
+            self.root / "diagnostics", self.resources,
+            str(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"),
+            lambda *args, **kwargs: hidden_spawn(*args, **kwargs))
+        self._claude_protection = ClaudeProtection(
+            self.root, self.resources,
+            str(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"), user_sid)
+        self._wechat_direct = WeChatDirect(
+            self.root, self.resources,
+            str(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"), user_sid)
         self._cached = self._base_status()
 
     def _base_status(self) -> dict:
@@ -444,7 +457,9 @@ class Coordinator:
                     version=APP_VERSION, direct=0, vpn=0, errors=0, active=0,
                     physical="", dns="DoH", message=self._message, logs=[],
                     vendor_installed=False, session_path="", proxy_restored=None,
-                    whitelist_applied_revision=None, whitelist_count=0)
+                    whitelist_applied_revision=None, whitelist_count=0,
+                    diagnostics=self._diagnostics.status(), claude_protection=self._claude_protection.status(),
+                    wechat_direct=self._wechat_direct.status())
 
     def status(self) -> dict:
         with self._lock:
@@ -457,10 +472,24 @@ class Coordinator:
 
     def refresh(self) -> None:
         # Files and process enumeration are read outside the status lock.
+        self._claude_protection.refresh()
+        protection = self._claude_protection.status()
+        self._wechat_direct.refresh()
+        wechat_direct = self._wechat_direct.status()
         running = vpn_running()
         installed = vendor_shortcut() is not None
         with self._lock:
             session, worker, recovery = self._session, self._worker, self._recovery
+        # Evidence collection owns a separate local process, so a disconnected
+        # VPN or a closed UI cannot interrupt its files. A normal companion stop
+        # requests its graceful exit; a failed collector never stops the proxy.
+        if worker is not None and worker.poll() is not None:
+            self._diagnostics.stop()
+        diagnostics = self._diagnostics.status()
+        if worker is not None and worker.poll() is None and not diagnostics["active"] and diagnostics["state"] == "stopped":
+            record = read_json(Path(diagnostics["session_path"]) / "status.json") if diagnostics["session_path"] else {}
+            if record.get("State") == "DurationComplete" and session is not None:
+                diagnostics = self._diagnostics.start(session)
         worker_status = read_json(session / "worker-status.json") if session else {}
         split = read_json(session / "split-status.json") if session else {}
         ui = read_json(session / "ui-response.json") if session else {}
@@ -474,7 +503,8 @@ class Coordinator:
         except OSError:
             ui_fresh = False
         with self._lock:
-            self._cached.update(vpn_running=running, vendor_installed=installed,
+            self._cached.update(vpn_running=running, vendor_installed=installed, diagnostics=diagnostics, claude_protection=protection,
+                                wechat_direct=wechat_direct,
                                 paused=paused, session_path=str(session or ""), logs=logs,
                                 connected=bool(worker is not None and worker.poll() is None and running and split.get("VpnReady") and ui_fresh and ui_value.get("State") == "Connected" and not ui.get("Error")),
                                 physical=str(split.get("Physical") or ""))
@@ -570,6 +600,7 @@ class Coordinator:
                 atomic_json(session / "bundle.json", {"Path": str(bundle)})
                 if paused:
                     (session / "pause").write_text("pause", encoding="utf-8")
+                self._diagnostics.start(session)
                 output = (session / "desktop-worker.log").open("ab", buffering=0)
                 args = [powershell_path(), "-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", str(runtime),
                         "-Role", "Worker", "-SessionPath", str(session), "-ControllerId", str(os.getpid()), "-ControllerTicks", str(identity[0]),
@@ -588,6 +619,7 @@ class Coordinator:
                 if self._stop_requested.is_set():
                     (session / "stop").write_text("stop", encoding="utf-8")
             except Exception as exc:
+                self._diagnostics.stop()
                 self._set("error", str(exc))
 
     def stop(self, timeout: float = 15) -> dict:
@@ -596,6 +628,9 @@ class Coordinator:
             with self._lock:
                 worker, session = self._worker, self._session
             if worker is None:
+                self._diagnostics.stop()
+                with self._lock:
+                    self._cached["diagnostics"] = self._diagnostics.status()
                 self._set("stopped", "当前没有本程序启动的保活或分流。")
                 return self.status()
             self._set("stopping", "正在停止保活并恢复启动前的代理设置…")
@@ -732,6 +767,44 @@ class Coordinator:
                 raise ServiceError("本地后台正在退出，请稍后重试。")
         if action == "status":
             return self.status()
+        if action in ("wechat-direct-enable", "wechat-direct-disable"):
+            try:
+                result = self._wechat_direct.change(action == "wechat-direct-enable")
+                with self._lock:
+                    self._cached["wechat_direct"] = result
+                return {"wechat_direct": result, "message": result.get("message", "")}
+            except WeChatDirectError as exc:
+                raise ServiceError(str(exc)) from exc
+        if action in ("claude-protection-enable", "claude-protection-disable"):
+            enabled = action == "claude-protection-enable"
+            with self._lock:
+                session, worker = self._session, self._worker
+                if enabled and (self._state != "running" or session is None or worker is None or worker.poll() is not None or self._stop_requested.is_set()):
+                    raise ServiceError("请先启动伴航并连接新加坡节点，再开启 Claude 出口保护。")
+            try:
+                result = self._claude_protection.change(enabled, session if enabled else None, payload.get("singapore_confirmed") is True)
+                with self._lock:
+                    self._cached["claude_protection"] = result
+                return {"claude_protection": result, "message": result.get("message", "")}
+            except ProtectionError as exc:
+                raise ServiceError(str(exc)) from exc
+        if action == "diagnostics-status":
+            return self._diagnostics.status()
+        if action == "diagnostics-deep-start":
+            result = self._diagnostics.start_deep()
+            if not result.get("ok"):
+                raise ServiceError(result.get("message", "深度记录未能启动。"))
+            return result
+        if action == "diagnostics-export":
+            destination = payload.get("path")
+            if not isinstance(destination, str) or not destination.strip() or not Path(destination).is_absolute():
+                raise ServiceError("请选择诊断ZIP的完整保存路径。")
+            with self._lock:
+                session = self._session
+            result = self._diagnostics.export(Path(destination), session)
+            if not result.get("ok"):
+                raise ServiceError(result.get("message", "诊断日志导出失败。"))
+            return result
         if action in ("whitelist-list", "whitelist-add", "whitelist-remove"):
             return self.whitelist(action, payload)
         if action == "start":

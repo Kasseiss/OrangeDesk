@@ -204,6 +204,73 @@ class EngineTests(unittest.TestCase):
         self.coordinator._output.close()
         self.coordinator._output = None
 
+    def test_monitor_starts_for_the_same_companion_session_before_worker(self):
+        worker = Mock(pid=123)
+        worker.poll.return_value = None
+        seen = []
+        def start_monitor(session):
+            seen.append(session)
+            return {"active": True}
+        def spawn_worker(*args, **kwargs):
+            self.assertEqual(len(seen), 1)
+            self.assertTrue((seen[0] / "bundle.json").is_file())
+            return worker
+        with patch("app.engine.process_identity", return_value=(123, "python.exe")), patch("app.engine.vpn_running", return_value=True), patch("app.engine.powershell_path", return_value="powershell.exe"), patch("app.engine.hidden_spawn", side_effect=spawn_worker), patch.object(self.coordinator._diagnostics, "start", side_effect=start_monitor):
+            self.coordinator._start_job(False)
+        self.assertEqual(seen, [self.coordinator._session])
+        self.coordinator._output.close()
+        self.coordinator._output = None
+
+    def test_diagnostic_export_available_when_companion_is_stopped(self):
+        output = self.root / "网络诊断.zip"
+        result = {"ok": True, "path": str(output), "files": 3, "omissions": []}
+        with patch.object(self.coordinator._diagnostics, "export", return_value=result) as export, patch("app.engine.hidden_spawn") as spawn:
+            self.assertEqual(self.coordinator.dispatch("diagnostics-export", {"path": str(output)}), result)
+        export.assert_called_once_with(output, None)
+        spawn.assert_not_called()
+        with self.assertRaises(engine.ServiceError):
+            self.coordinator.dispatch("diagnostics-export", {"path": "relative.zip"})
+
+    def test_explicit_deep_recording_failure_is_visible(self):
+        with patch.object(self.coordinator._diagnostics, "start_deep", return_value={"ok": False, "message": "管理员启动已取消"}):
+            with self.assertRaisesRegex(engine.ServiceError, "管理员启动已取消"):
+                self.coordinator.dispatch("diagnostics-deep-start")
+
+    def test_claude_protection_enable_requires_running_own_companion(self):
+        with patch.object(self.coordinator._claude_protection, "change") as change:
+            with self.assertRaises(engine.ServiceError):
+                self.coordinator.dispatch("claude-protection-enable", {"singapore_confirmed": True})
+            change.assert_not_called()
+
+    def test_claude_protection_scopes_proof_to_own_current_session(self):
+        worker, session = self._worker()
+        worker.poll.return_value = None
+        self.coordinator._state = "running"
+        result = {"state": "pending", "enabled": False, "message": "等待授权"}
+        with patch.object(self.coordinator._claude_protection, "change", return_value=result) as change:
+            self.assertEqual(self.coordinator.dispatch("claude-protection-enable", {"singapore_confirmed": True})["claude_protection"], result)
+        change.assert_called_once_with(True, session, True)
+
+    def test_claude_protection_preflight_error_is_visible(self):
+        worker, _ = self._worker()
+        worker.poll.return_value = None
+        self.coordinator._state = "running"
+        with patch.object(self.coordinator._claude_protection, "change", side_effect=engine.ProtectionError("VPN未就绪")):
+            with self.assertRaisesRegex(engine.ServiceError, "VPN未就绪"):
+                self.coordinator.dispatch("claude-protection-enable", {"singapore_confirmed": True})
+
+    def test_claude_protection_can_be_disabled_when_companion_is_stopped(self):
+        result = {"state": "pending", "enabled": True}
+        with patch.object(self.coordinator._claude_protection, "change", return_value=result) as change, patch("app.engine.hidden_spawn") as spawn:
+            self.coordinator.dispatch("claude-protection-disable")
+        change.assert_called_once_with(False, None, False)
+        spawn.assert_not_called()
+
+    def test_stop_requests_monitor_shutdown_without_a_proxy_worker(self):
+        with patch.object(self.coordinator._diagnostics, "stop") as stop:
+            self.coordinator.stop()
+        stop.assert_called_once()
+
     def test_start_opens_vendor_only_when_not_running(self):
         with patch("app.engine.process_identity", return_value=(123, "python.exe")), patch("app.engine.vpn_running", return_value=False), patch.object(self.coordinator, "open_vpn", side_effect=engine.ServiceError("mock activation")) as opener, patch("app.engine.hidden_spawn") as spawn:
             self.coordinator._start_job(False)

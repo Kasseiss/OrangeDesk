@@ -1,4 +1,4 @@
-#define AppVersion "1.2.1"
+#define AppVersion "1.3.3"
 [Setup]
 AppId={{D6C0C715-6EB7-4D5B-B481-B4C7CCDD50B2}
 AppName=快橙伴航
@@ -35,6 +35,9 @@ Name: "vendor"; Description: "尚未安装快橙时，打开官方安装程序";
 [Files]
 Source: "..\dist\OrangeDesk\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\发布\安装与使用.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\发布\网络监测使用说明.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\发布\Claude出口保护使用说明.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\发布\微信直连使用说明.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\快橙伴航"; Filename: "{app}\OrangeDesk.exe"; AppUserModelID: "OrangeDesk.Companion"
@@ -76,8 +79,26 @@ begin
 end;
 
 function InitializeUninstall(): Boolean;
+var ExitCode: Integer;
 begin
+  Result := False;
+  if not FileExists(ExpandConstant('{app}\OrangeDesk.exe')) then begin
+    MsgBox('主程序缺失，无法核验并关闭独立微信分流和 Claude 出口保护，已停止卸载。请先修复安装，或使用完整更新包关闭这两项功能后再重试。', mbError, MB_OK);
+    Exit;
+  end;
   Result := StopService(ExpandConstant('{app}'));
-  if not Result then
+  if not Result then begin
     MsgBox('代理恢复未完成，已保留程序。请先在伴航中停止运行，或执行 orange restore，然后重试卸载。', mbError, MB_OK);
+    Exit;
+  end;
+  Result := Exec(ExpandConstant('{app}\OrangeDesk.exe'), 'wechat-direct disable --if-present', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  if Result then Result := ExitCode = 0;
+  if not Result then begin
+    MsgBox('微信直连尚未确认关闭，已保留程序。请先在伴航中关闭“微信直连”，再重试卸载。', mbError, MB_OK);
+    Exit;
+  end;
+  Result := Exec(ExpandConstant('{app}\OrangeDesk.exe'), 'claude-protection disable --if-present', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  if Result then Result := ExitCode = 0;
+  if not Result then
+    MsgBox('Claude 出口保护尚未确认关闭，已保留程序。请先在伴航中关闭“Claude 出口保护”并完成管理员授权，再重试卸载。', mbError, MB_OK);
 end;

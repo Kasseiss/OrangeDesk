@@ -176,7 +176,7 @@ function Read-WhitelistSnapshot {
 }
 function Write-BrowserSplitStatus {
     if ($null -eq $script:Bridge -or $null -eq $script:BrowserTarget) { return }
-    Write-AtomicJson (Join-Path $SessionPath 'split-status.json') @{Direct=$script:Bridge.DirectCount;Vpn=$script:Bridge.VpnCount;Errors=$script:Bridge.ErrorCount;Active=$script:Bridge.ActiveCount;Physical=$script:BrowserTarget.Alias;VpnReady=$script:BrowserTarget.VpnReady;WhitelistRevision=$script:WhitelistRevision;WhitelistCount=$script:WhitelistCount}
+    Write-AtomicJson (Join-Path $SessionPath 'split-status.json') @{Direct=$script:Bridge.DirectCount;Vpn=$script:Bridge.VpnCount;Errors=$script:Bridge.ErrorCount;Active=$script:Bridge.ActiveCount;Physical=$script:BrowserTarget.Alias;VpnReady=$script:BrowserTarget.VpnReady;WhitelistRevision=$script:WhitelistRevision;WhitelistCount=$script:WhitelistCount;StrictVpnBinding=$true;PacDirectFallback=$false}
 }
 function Sync-WhitelistOverrides([switch]$Initial,[switch]$Force) {
     if ($null -eq $script:BridgePolicy) { return }
@@ -274,8 +274,16 @@ function Get-BrowserTarget {
     $halves=@($routes | Where-Object DestinationPrefix -in '0.0.0.0/1','128.0.0.0/1')
     $tap=@(Get-NetAdapter -IncludeHidden | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -like '*TAP-Windows*' })
     $vpnReady=$halves.Count -eq 2 -and $halves[0].InterfaceIndex -eq $halves[1].InterfaceIndex -and
+        @($halves.DestinationPrefix | Sort-Object -Unique).Count -eq 2 -and
         @($tap | Where-Object ifIndex -eq $halves[0].InterfaceIndex).Count -eq 1
-    return [pscustomobject]@{Index=[int]$defaults[0].InterfaceIndex;Alias=$defaults[0].InterfaceAlias;Gateway=$defaults[0].NextHop;VpnReady=$vpnReady}
+    $vpnIndex=-1; $vpnGuid=''; $vpnAddress=''
+    if ($vpnReady) {
+        $selected=@($tap | Where-Object ifIndex -eq $halves[0].InterfaceIndex)[0]
+        $addresses=@(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $selected.ifIndex -ErrorAction Stop | Where-Object { $_.AddressState -eq 'Preferred' -and $_.IPAddress -notmatch '^(127\.|169\.254\.|0\.)' })
+        $vpnReady=$addresses.Count -eq 1
+        if ($vpnReady) { $vpnIndex=[int]$selected.ifIndex; $vpnGuid=[string]$selected.InterfaceGuid; $vpnAddress=$addresses[0].IPAddress }
+    }
+    return [pscustomobject]@{Index=[int]$defaults[0].InterfaceIndex;Alias=$defaults[0].InterfaceAlias;Gateway=$defaults[0].NextHop;VpnReady=$vpnReady;VpnIndex=$vpnIndex;VpnGuid=$vpnGuid;VpnAddress=$vpnAddress}
 }
 function Start-BrowserSplit {
     Initialize-Bridge
@@ -289,7 +297,7 @@ function Start-BrowserSplit {
     [void]$script:Bridge.Start()
     $target=Get-BrowserTarget
     $script:BrowserTarget=$target
-    $script:Bridge.Configure($target.Index,$target.VpnReady)
+    $script:Bridge.Configure($target.Index,$target.VpnIndex,$target.VpnGuid,$target.VpnAddress)
     $before=[FastOrangeCombined.ProxySettings]::Read()
     $saved=@{Version=2;PacUrl=$script:Bridge.PacUrl;Before=$before;Applied=$null}
     Write-AtomicJson (Join-Path $SessionPath 'proxy-before.json') $saved
@@ -313,8 +321,8 @@ function Sync-BrowserSplit {
     }
     $target=Get-BrowserTarget
     $script:BrowserTarget=$target
-    $script:Bridge.Configure($target.Index,$target.VpnReady)
-    $key='{0}|{1}|{2}' -f $target.Index,$target.Gateway,$target.VpnReady
+    $script:Bridge.Configure($target.Index,$target.VpnIndex,$target.VpnGuid,$target.VpnAddress)
+    $key='{0}|{1}|{2}|{3}|{4}' -f $target.Index,$target.Gateway,$target.VpnIndex,$target.VpnGuid,$target.VpnAddress
     if ($key -cne $script:BrowserTargetKey) {
         Write-Status ('分流出口：国内 '+$target.Alias+' / '+$target.Gateway+'；快橙路由就绪='+$target.VpnReady)
         $script:BrowserTargetKey=$key
@@ -815,7 +823,7 @@ function Start-Worker {
                     $message=$_.Exception.Message
                     if ($message -cne $lastError) { Write-Status ('分流：'+$message); $lastError=$message }
                     if ($Simulation -and $script:Owned.Count -gt 0) { [void](Remove-OwnedRoutes) }
-                    elseif ($null -ne $script:Bridge) { $script:Bridge.Configure(-1,$false) }
+                    elseif ($null -ne $script:Bridge) { $script:Bridge.Configure(-1,-1,'','') }
                     $nextRoutes=$script:Stopwatch.Elapsed.TotalSeconds+3
                 }
             }

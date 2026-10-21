@@ -1,9 +1,17 @@
 /.build/
 /dist/
+/UI预览-Claude/
 /backup/
 /诊断/
 /发布/*
 !/发布/安装与使用.txt
+!/发布/网络监测使用说明.txt
+!/发布/Claude出口保护使用说明.txt
+!/发布/微信直连使用说明.txt
+!/发布/Update-Companion.ps1
+!/发布/更新并打开伴航.cmd
+!/发布/关闭微信直连.cmd
+!/发布/关闭Claude出口保护.cmd
 __pycache__/
 *.py[cod]
 *.log

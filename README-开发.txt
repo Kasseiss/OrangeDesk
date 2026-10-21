@@ -1,4 +1,4 @@
-﻿快橙伴航 1.2.1 — 自编源码与重建
+﻿快橙伴航 1.3.3 — 自编源码与重建
 
 Windows x64 / Python 3.12 / PySide6 6.12.0 / PyInstaller 6.22.3 / Inno Setup 6.3+
 本项目使用 Qt Widgets；UI、CLI 和控制后台共用业务状态。

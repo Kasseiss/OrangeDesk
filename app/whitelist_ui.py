@@ -359,8 +359,8 @@ class WhitelistDialog(QDialog):
         self._theme = mode
         dark = mode == "dark"
         background, surface, text, muted, border = (
-            ("#102038", "#0c192b", "#dceafa", "#9eb7d0", "#496481") if dark else
-            ("#e7f0fa", "#f4f8fd", "#244461", "#5f7892", "#a5bfd7")
+            ("#17181b", "#111214", "#f3eee7", "#928c84", "#36373d") if dark else
+            ("#fdfcfa", "#f3f1ec", "#1d1b18", "#716b62", "#cec8be")
         )
         palette = self.palette()
         for role, color in ((QPalette.ColorRole.Window, background), (QPalette.ColorRole.Base, surface),
@@ -373,13 +373,13 @@ class WhitelistDialog(QDialog):
             QDialog#WhitelistDialog {{ background: {background}; color: {text}; }}
             QDialog#WhitelistDialog QLabel, QDialog#WhitelistDialog QCheckBox {{ color: {text}; }}
             QDialog#WhitelistDialog QLabel#Muted {{ color: {muted}; }}
-            QDialog#WhitelistDialog QLabel#WhitelistError {{ color: {'#ffabb0' if dark else '#a42b39'}; }}
+            QDialog#WhitelistDialog QLabel#WhitelistError {{ color: {'#ef8075' if dark else '#c4473b'}; }}
             QDialog#WhitelistDialog QPushButton#Ghost {{ color: {text}; }}
             QDialog#WhitelistDialog QPushButton#Ghost:disabled {{ color: {muted}; }}
             QDialog#WhitelistDialog QLineEdit, QDialog#WhitelistDialog QTableWidget {{
                 background: {surface}; color: {text}; border: 1px solid {border}; border-radius: 6px;
                 alternate-background-color: {background};
-                selection-background-color: {'#285480' if dark else '#bfd9f5'};
+                selection-background-color: {'#5b3a22' if dark else '#f7d6ba'};
                 selection-color: {text}; padding: 5px;
             }}
             QDialog#WhitelistDialog QHeaderView::section {{

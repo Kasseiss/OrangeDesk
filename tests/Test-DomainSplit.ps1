@@ -44,10 +44,10 @@ try {
     $bridge=[FastOrangeCombined.BridgeServer]::new($policy,$token)
     $port=$bridge.Start()
     $target=Get-BrowserTarget
-    $bridge.Configure($target.Index,$target.VpnReady)
+    $bridge.Configure($target.Index,$target.VpnIndex,$target.VpnGuid,$target.VpnAddress)
     $pac=[Net.WebClient]::new()
     try { $pac.Proxy=$null; $pacText=$pac.DownloadString($bridge.PacUrl) } finally { $pac.Dispose() }
-    Check ($pacText.Contains('PROXY 127.0.0.1:'+ $port+'; DIRECT')) 'PAC provides original-route fallback when server stops'
+    Check ($pacText.Contains('PROXY 127.0.0.1:'+ $port) -and -not $pacText.Contains('; DIRECT')) 'PAC has no unprotected direct fallback when server stops'
     if ($LiveNetwork) {
         foreach ($hostName in 'www.zhihu.com','pic1.zhimg.com','chatgpt.com') {
             # Retain chain/hostname validation; unavailable online CRL endpoints must not dominate this network test.

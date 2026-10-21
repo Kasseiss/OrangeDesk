@@ -96,6 +96,10 @@ def request(action: str, payload: dict | None = None, timeout: float = 5) -> dic
         timeout = max(timeout, 22)
     elif action == "restore":
         timeout = max(timeout, 50)
+    elif action in ("diagnostics-export", "diagnostics-deep-start"):
+        timeout = max(timeout, 120)
+    elif action.startswith(("claude-protection-", "wechat-direct-")):
+        timeout = max(timeout, 20)
     if action != "shutdown":
         ensure_service()
     endpoint = _endpoint()
